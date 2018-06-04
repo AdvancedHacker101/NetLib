@@ -1711,6 +1711,20 @@ namespace NetLib
             {
                 return new Tuple<bool, IPAddress>(IPAddress.TryParse(ipAddress, out IPAddress address), address); // Return the results of the check and the IP Address
             }
+
+            /// <summary>
+            /// Create an endpoint to connect/bind to
+            /// </summary>
+            /// <param name="destination">The hostname or address of the endpoint</param>
+            /// <param name="portNumber">The port number of the endpoint</param>
+            /// <returns>A valid endpoint generated from the specified data</returns>
+            public static IPEndPoint CreateEndPoint(string destination, int portNumber)
+            {
+                if (!IsPortValid(portNumber)) throw new ArgumentException("Port number outside of the valid port number range");
+                Tuple<bool, IPAddress> ip = IsValidDestination(destination);
+                if (!ip.Item1) throw new ArgumentException("The specified destination is invalid!");
+                return new IPEndPoint(ip.Item2, portNumber);
+            }
         }
 
         /// <summary>
