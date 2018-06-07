@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Net; // Basic networking objects
 using System.Net.Sockets; // Sockets
 using System.Security.Cryptography.X509Certificates; // Certificate parsing
+using System.Collections.Generic;
 
 /// <summary>
 /// Network Library
@@ -19,6 +20,64 @@ namespace NetLib
     /// </summary>
     namespace Interfaces
     {
+        /// <summary>
+        /// Basic network connection functionallity
+        /// </summary>
+        interface INetworkSocket
+        {
+            /// <summary>
+            /// Start the socket connection
+            /// </summary>
+            void Start();
+            /// <summary>
+            /// Gracefully stop the socket connection
+            /// </summary>
+            void GracefulStop();
+            /// <summary>
+            /// Forcefully stop the socket connection
+            /// </summary>
+            void ForceStop();
+        }
+
+        /// <summary>
+        /// Basic Server Functionallity
+        /// </summary>
+        interface INetworkServer
+        {
+            /// <summary>
+            /// Add an event listener for client connects
+            /// </summary>
+            /// <param name="callback">The function to call when a new client connects</param>
+            void AddEventClientConnected(Action callback);
+            /// <summary>
+            /// Add an event listener for client disconnects
+            /// </summary>
+            /// <param name="callback">The function to call when a client disconnects</param>
+            void AddEventClientDisconnected(Action callback);
+        }
+
+        /// <summary>
+        /// Basic Multi Socket Server Functionallity
+        /// </summary>
+        interface INetworkMultiServer
+        {
+            /// <summary>
+            /// List the IDs of connected clients
+            /// </summary>
+            /// <returns>A string[] filled with the ID of the connected clients</returns>
+            string[] ListClients();
+            /// <summary>
+            /// Add an event listener for new client connections
+            /// </summary>
+            /// <param name="callback">The function to call when a new client connects</param>
+            void AddEventClientConnected(Action<string> callback);
+            /// <summary>
+            /// Add an event listener for client disconnections
+            /// </summary>
+            /// <param name="callback">The function to call when a client disconnects</param>
+            void AddEventClientDisconnected(Action<string> callback);
+        }
+
         /// <summary>
         /// Read messages from a socket connection
         /// </summary>
@@ -112,6 +171,110 @@ namespace NetLib
             /// <param name="newLine">The line terminator character to send</param>
             void SetSendNewLine(string newLine);
         }
+
+        /// <summary>
+        /// Write messages to a multi socket server connection
+        /// </summary>
+        interface INetworkMultiWriter
+        {
+            /// <summary>
+            /// Write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The bytes to send to the stream</param>
+            /// <param name="clientid">The ID of the client to send the data to</param>
+            void DirectWrite(byte[] buffer, string clientid);
+            /// <summary>
+            /// Write bytes to the stream with offset
+            /// </summary>
+            /// <param name="buffer">The bytes to send to the stream</param>
+            /// <param name="offset">The offset to send the bytes from</param>
+            /// <param name="clientid">The ID of the client to send the data to</param>
+            void DirectWrite(byte[] buffer, int offset, string clientid);
+            /// <summary>
+            /// ?Write bytes to the stream with offset and length
+            /// </summary>
+            /// <param name="buffer">The bytes to send to the stream</param>
+            /// <param name="offset">The offset to send the bytes from</param>
+            /// <param name="length">The number of bytes to send</param>
+            /// <param name="clientid">The ID of the client to send the data to</param>
+            void DirectWrite(byte[] buffer, int offset, int length, string clientid);
+            /// <summary>
+            /// Write a line to the stream
+            /// </summary>
+            /// <param name="data">The line to write to the stream</param>
+            /// <param name="clientid">The ID of the client to send the new line to</param>
+            void WriteLine(string data, string clientid);
+            /// <summary>
+            /// Set the encoding to encode string into bytes when sending a new line
+            /// </summary>
+            /// <param name="encoding">The encoding to encode strings with</param>
+            void SetSendEncoding(Encoding encoding);
+            /// <summary>
+            /// Set the line terminator to send whne sending a new line
+            /// </summary>
+            /// <param name="newLine">The line terminator character to send</param>
+            void SetSendNewLine(string newLine);
+        }
+
+        /// <summary>
+        /// Read messages from a multi socket server connection
+        /// </summary>
+        interface INetworkMultiReader
+        {
+            /// <summary>
+            /// Read raw bytes from the stream
+            /// </summary>
+            /// <param name="size">Number of bytes to read</param>
+            /// <param name="clientid">The ID of the client to read bytes from</param>
+            /// <returns>Bytes read from the stream</returns>
+            byte[] DirectRead(int size, string clientid);
+            /// <summary>
+            /// Read the stream until a line terminator
+            /// </summary>
+            /// <param name="clientid">The ID of the client to read a new line from</param>
+            /// <returns>The line read from the stream</returns>
+            string ReadLine(string clientid);
+            /// <summary>
+            /// Add an event listener for receiving bytes
+            /// </summary>
+            /// <param name="callback">The function to call when bytes are read</param>
+            /// <param name="clientid">The ID of the client to add the event to</param>
+            void AddEventDataReceived(Action<byte[]> callback, string clientid);
+            /// <summary>
+            /// Add an event listener for receiving lines
+            /// </summary>
+            /// <param name="callback">The function to call when lines are received</param>
+            /// <param name="clientid">The ID of the client to add the event to</param>
+            void AddEventLineReceived(Action<string> callback, string clientid);
+            /// <summary>
+            /// Set the encoding used to decode bytes back to string
+            /// </summary>
+            /// <param name="encoding">The encoding to use</param>
+            void SetReceiveEncoding(Encoding encoding);
+            /// <summary>
+            /// Set the size of the buffer to read from the stream
+            /// </summary>
+            /// <param name="size">The size of the buffer</param>
+            void SetReceiveSize(int size);
+            /// <summary>
+            /// Set the line terminator character for the readLine function
+            /// </summary>
+            /// <param name="newLine"></param>
+            void SetReceiveNewLine(string newLine);
+            /// <summary>
+            /// Read butes from the stream asnyc
+            /// </summary>
+            /// <param name="maxSize">The size of the buffer to read from the stream</param>
+            /// <param name="clientid">The ID of the client to read bytes from</param>
+            /// <returns>The bytes read from the stream</returns>
+            Task<byte[]> DirectReadAsync(int maxSize, string clientid);
+            /// <summary>
+            /// Read the stream until a line terminator async
+            /// </summary>
+            /// <param name="clientid">The ID of the client to read a new line from</param>
+            /// <returns>The line read from the stream</returns>
+            Task<string> ReadLineAsync(string clientid);
+        }
     }
 
     /// <summary>
@@ -122,7 +285,7 @@ namespace NetLib
         /// <summary>
         /// Single Client Tcp Server
         /// </summary>
-        public class SingleTcpServer : Interfaces.INetworkReader, Interfaces.INetworkWriter
+        public class SingleTcpServer : Interfaces.INetworkReader, Interfaces.INetworkWriter, Interfaces.INetworkSocket, Interfaces.INetworkServer
         {
             /// <summary>
             /// The socket of the server
@@ -164,6 +327,14 @@ namespace NetLib
             /// Indicates if the server should restart after the current client closes
             /// </summary>
             protected bool restartReading;
+            /// <summary>
+            /// Event listener for client disconnection
+            /// </summary>
+            protected event Action ClientDisconnected;
+            /// <summary>
+            /// Event listener for client connection
+            /// </summary>
+            protected event Action ClientConnected;
 
             /// <summary>
             /// Init the server
@@ -216,6 +387,8 @@ namespace NetLib
                     client.SetSendEncoding(sendEncoder);
                     client.SetSendNewLine(writeNewLine);
                     client.AddEventClientStopped(() => { if (restartReading) Start(); });
+                    client.AddEventClientStopped(() => ClientDisconnected?.Invoke());
+                    ClientConnected?.Invoke();
                 });
                 t.Start(); // Start listening
                 serverOffline = false; // Server's running
@@ -429,12 +602,30 @@ namespace NetLib
             {
                 writeNewLine = newLine;
             }
+
+            /// <summary>
+            /// Add an event listener for when the client disconnects
+            /// </summary>
+            /// <param name="callback">The function to call when the client disconnects</param>
+            public void AddEventClientDisconnected(Action callback)
+            {
+                ClientDisconnected += callback; // Add the callback to the event
+            }
+
+            /// <summary>
+            /// Add an event listener for when the client connects
+            /// </summary>
+            /// <param name="callback">The function to call when the new client connects</param>
+            public void AddEventClientConnected(Action callback)
+            {
+                ClientConnected += callback; // Add the callback to the event
+            }
         }
 
         /// <summary>
         /// Single Client SSL Server
         /// </summary>
-        public class SingleSSLServer : Interfaces.INetworkReader, Interfaces.INetworkWriter
+        public class SingleSSLServer : Interfaces.INetworkReader, Interfaces.INetworkWriter, Interfaces.INetworkSocket, Interfaces.INetworkServer
         {
             /// <summary>
             /// The server socket
@@ -488,6 +679,10 @@ namespace NetLib
             /// The SSL Parameters of the server
             /// </summary>
             protected Utils.SSL.ServerSSLData sslParams;
+            /// <summary>
+            /// Event listener when the client disconnects
+            /// </summary>
+            protected event Action ClientDisconnected;
 
             /// <summary>
             /// Init the server
@@ -598,6 +793,7 @@ namespace NetLib
                         client.SetSendEncoding(sendEncoder);
                         client.SetSendNewLine(writeNewLine);
                         client.AddEventClientStopped(() => { if (restartReading) Start(); });
+                        client.AddEventClientStopped(() => ClientDisconnected?.Invoke());
                         ClientConnected?.Invoke(); // Notify the executing assembly of the connection
                     }
                     catch (Exception ex) // Something went wrong
@@ -834,6 +1030,414 @@ namespace NetLib
             {
                 writeNewLine = newLine; // Set the line terminator
             }
+
+            /// <summary>
+            /// Add an event listener for when a client disconnects
+            /// </summary>
+            /// <param name="callback">The function to call when the client disconnects</param>
+            public void AddEventClientDisconnected(Action callback)
+            {
+                ClientDisconnected += callback; // Add callback to function
+            }
+        }
+
+        public class MultiTcpServer : Interfaces.INetworkMultiReader, Interfaces.INetworkMultiWriter, Interfaces.INetworkSocket, Interfaces.INetworkMultiServer
+        {
+            /// <summary>
+            /// The socket of the server
+            /// </summary>
+            protected Socket serverSocket;
+            /// <summary>
+            /// The connected client's socket
+            /// </summary>
+            protected List<Tuple<string, Clients.TcpClient>> clients = new List<Tuple<string, Clients.TcpClient>>();
+            /// <summary>
+            /// The endpoint to run the server on
+            /// </summary>
+            protected IPEndPoint serverEndPoint;
+            /// <summary>
+            /// The size of the buffer to receive from the client
+            /// </summary>
+            protected int recvSize;
+            /// <summary>
+            /// The encoding used when receiving new lines
+            /// </summary>
+            protected Encoding recvEncoder;
+            /// <summary>
+            /// The encoding use when sending new lines
+            /// </summary>
+            protected Encoding sendEncoder;
+            /// <summary>
+            /// The new line terminator to read until
+            /// </summary>
+            protected string readNewLine;
+            /// <summary>
+            /// The new line terminator to send
+            /// </summary>
+            protected string writeNewLine;
+            /// <summary>
+            /// Indicates if the server's running
+            /// </summary>
+            protected bool serverOffline = true;
+            /// <summary>
+            /// Event listener for when a new client is connected
+            /// </summary>
+            protected event Action<string> ClientConnected;
+            /// <summary>
+            /// Event listener for when a client is disconnected
+            /// </summary>
+            protected event Action<string> ClientDisconnected;
+
+            /// <summary>
+            /// Init the server
+            /// </summary>
+            /// <param name="ep">The endpoint to run the server on</param>
+            public MultiTcpServer(IPEndPoint ep)
+            {
+                ServerInit(); // Init the server
+                serverEndPoint = ep; // Set the endpoint to run on
+            }
+
+            /// <summary>
+            /// Init the server
+            /// </summary>
+            private void ServerInit()
+            {
+                clients.Clear(); // Clear the current client list
+                serverEndPoint = null; // Reset the current endpoint
+                serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new server socket
+                recvSize = 2048; // Init the read buffer size
+            }
+
+            /// <summary>
+            /// Start the server
+            /// </summary>
+            public void Start()
+            {
+                serverSocket.Bind(serverEndPoint); // Bind to the specified endpoint
+                serverSocket.Listen(100); // Listen for max 100 pending connections
+                Task t = new Task(() =>
+                {
+                    while (!serverOffline)
+                    {
+                        Socket clientSocket = null;
+                        try
+                        {
+                            clientSocket = serverSocket.Accept(); // Accept the pending client
+                            if (serverOffline) break;
+                        }
+                        catch (Exception ex)
+                        {
+                            if (serverSocket == null)
+                            {
+                                Console.WriteLine("Error, when shutting down server, ignorable most likely");
+                                return;
+                            }
+
+#if Validation_soft // Important check
+                            throw new Exception("Failed to accept socket connection!", ex);
+#endif
+                        }
+                        Clients.TcpClient client = new Clients.TcpClient(clientSocket); // Wrap the clinet in the NetLib tcp client class
+                        string clientID = Utils.NetworkIO.GenerateID(); // Generate the runtime unique ID of the client
+                                                                        // Set client data
+                        client.SetReceiveEncoding(recvEncoder);
+                        client.SetReceiveNewLine(readNewLine);
+                        client.SetReceiveSize(recvSize);
+                        client.SetSendEncoding(sendEncoder);
+                        client.SetSendNewLine(writeNewLine);
+                        // Construct the clientData
+                        Tuple<string, Clients.TcpClient> clientData = new Tuple<string, Clients.TcpClient>(clientID, client);
+                        // Add the client to the list
+                        clients.Add(clientData);
+                        client.AddEventClientStopped(() => ClientDisconnected?.Invoke(clientID));
+                        ClientConnected?.Invoke(clientID); // Fire the connection event 
+                    }
+                });
+                serverOffline = false; // Server's running
+                t.Start(); // Start listening
+            }
+
+            /// <summary>
+            /// Add event listener for when a new client is connected
+            /// </summary>
+            /// <param name="callback">The function to call when a new client is connected</param>
+            public void AddEventClientConnected(Action<string> callback)
+            {
+                ClientConnected += callback; // Add the function to the event
+            }
+
+            /// <summary>
+            /// List the IDs of connected clients
+            /// </summary>
+            /// <returns>A string array filled with the ID of connected clients</returns>
+            public string[] ListClients()
+            {
+                List<string> localClients = new List<string>(); // Define a new list for the return value
+
+                foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the clients
+                {
+                    localClients.Add(client.Item1); // Add the ID of the clients
+                }
+
+                return localClients.ToArray(); // Return the client ID array
+            }
+
+            /// <summary>
+            /// Get the NetLib TcpClient instance from a client ID
+            /// </summary>
+            /// <param name="clientID">The ID of the client</param>
+            /// <returns>The NetLib TcpClient associated with the given ID</returns>
+            private Clients.TcpClient GetClientByID(string clientID)
+            {
+                Tuple<string, Clients.TcpClient> tuple = clients.Find((data) => data.Item1 == clientID); // Find the matching client
+                if (tuple == null) // If not found
+                {
+#if Validation_hard // Not so important check
+                    throw new ArgumentException("The specified clientID isn't existing");
+#else
+                    return null;
+#endif
+                }
+
+                return tuple.Item2; // Return the client instance
+            }
+
+            /// <summary>
+            /// Read bytes from the stream
+            /// </summary>
+            /// <param name="maxSize">The number of maximum bytes to read</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The bytes read from the stream</returns>
+            public byte[] DirectRead(int maxSize, string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return new byte[] { }; // Return if the client isn't found and error's suppressed
+                return client.DirectRead(maxSize); // Use the wrapped client to read from the stream
+            }
+
+            /// <summary>
+            /// Read a line from the stram
+            /// </summary>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The line read from the stream</returns>
+            public string ReadLine(string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return ""; // Return if the client isn't found and error's suppressed
+                return client.ReadLine(); // Use the wrapped client to read new lines
+            }
+
+            /// <summary>
+            /// Read bytes from the stream async
+            /// </summary>
+            /// <param name="maxSize">The number of maximum bytes to read from the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The bytes read from the stream</returns>
+            public async Task<byte[]> DirectReadAsync(int maxSize, string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return null; // Return if the client isn't found and error's suppressed
+                return await client.DirectReadAsync(maxSize); // Wait for the function to complete and return
+            }
+
+            /// <summary>
+            /// Read a line from the stream async
+            /// </summary>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The line read from the stream</returns>
+            public async Task<string> ReadLineAsync(string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return null; // Return if the client isn't found and error's suppressed
+                return await client.ReadLineAsync(); // Wait for the function to complete
+            }
+
+            /// <summary>
+            /// Close the client gracefully
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// </summary>
+            private void GracefulCloseClient(Clients.TcpClient client)
+            {
+                if (client == null) return; // Check if the client is null
+                client.GracefulStop(); // Stop the client
+                client = null; // Reset the client
+            }
+
+            /// <summary>
+            /// Close the client forcefully
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// </summary>
+            private void ForceCloseClient(Clients.TcpClient client)
+            {
+                if (client == null) return; // Check if the client is null
+                client.ForceStop(); // Close the client
+                client = null; // Reset the client
+            }
+
+            /// <summary>
+            /// Close the server
+            /// </summary>
+            private void ServerClose()
+            {
+                serverSocket.Close(); // Close the server socket
+                serverSocket.Dispose(); // Dispose the server socket
+                serverSocket = null; // Reset the server socket
+            }
+
+            /// <summary>
+            /// Close the server gracefully
+            /// </summary>
+            public void GracefulStop()
+            {
+                if (serverOffline) return; // Check if the server's stopped
+                foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the connected clients
+                {
+                    GracefulCloseClient(client.Item2); // Close the client
+                }
+                ServerClose(); // Close the server
+                serverOffline = true; // The server's stopped
+            }
+
+            /// <summary>
+            /// Forcefully stop the server
+            /// </summary>
+            public void ForceStop()
+            {
+                if (serverOffline) return; // Check if the server's stopped
+                foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the connected clients
+                {
+                    ForceCloseClient(client.Item2); // Force close the client
+                }
+                ServerClose(); // Close the server
+                serverOffline = true; // The server's stopped
+            }
+
+            /// <summary>
+            /// Add event listener for receiving bytes
+            /// </summary>
+            /// <param name="callback">The function to call when bytes are read from the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void AddEventDataReceived(Action<byte[]> callback, string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
+                client.AddEventDataReceived(callback); // Use the wrapped client to listen for bytes
+            }
+
+            /// <summary>
+            /// Add event listener for receiving new lines
+            /// </summary>
+            /// <param name="callback">The function to call when new lines are read from the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void AddEventLineReceived(Action<string> callback, string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
+                client.AddEventLineReceived(callback); // Use the wrapped client to listen for new lines
+            }
+
+            /// <summary>
+            /// Set the read encoding
+            /// </summary>
+            /// <param name="encoding">The encoding to decode bytes arrays with</param>
+            public void SetReceiveEncoding(Encoding encoding)
+            {
+                recvEncoder = encoding; // Set the encoding
+            }
+
+            /// <summary>
+            /// Set the maximum number of bytes to receive
+            /// </summary>
+            /// <param name="size">The number of bytes</param>
+            public void SetReceiveSize(int size)
+            {
+                recvSize = size; // Set the size
+            }
+
+            /// <summary>
+            /// Set the read line terminator
+            /// </summary>
+            /// <param name="newLine">The line terminator character</param>
+            public void SetReceiveNewLine(string newLine)
+            {
+                readNewLine = newLine; // Set the line terminator
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void DirectWrite(byte[] buffer, string clientID)
+            {
+                DirectWrite(buffer, 0, buffer.Length, clientID); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="offset">The offset to begin writing from</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void DirectWrite(byte[] buffer, int offset, string clientID)
+            {
+                DirectWrite(buffer, offset, buffer.Length - offset, clientID); // Write bytes to the stream
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="offset">The offset to begin writing from</param>
+            /// <param name="length">The number of bytes to write out</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void DirectWrite(byte[] buffer, int offset, int length, string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return; // Check if the client is null
+                client.DirectWrite(buffer, offset, length); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Write a line to the stream
+            /// </summary>
+            /// <param name="data">The line to write to the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void WriteLine(string data, string clientID)
+            {
+                Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return; // Check if the client is null
+                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
+                DirectWrite(buffer, clientID); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Set the encoding for writing new lines to the stream
+            /// </summary>
+            /// <param name="encoding">The encoding to use</param>
+            public void SetSendEncoding(Encoding encoding)
+            {
+                sendEncoder = encoding; // Set the encoding
+            }
+
+            /// <summary>
+            /// Set the new line terminator used when sending new lines
+            /// </summary>
+            /// <param name="newLine">The new line terminator to use</param>
+            public void SetSendNewLine(string newLine)
+            {
+                writeNewLine = newLine;
+            }
+
+            /// <summary>
+            /// Add an event listener for when a client is disconnected
+            /// </summary>
+            /// <param name="callback">The function to call when the client disconnects</param>
+            public void AddEventClientDisconnected(Action<string> callback)
+            {
+                ClientDisconnected += callback; // Add the callback to the event
+            }
         }
     }
 
@@ -845,7 +1449,7 @@ namespace NetLib
         /// <summary>
         /// Basic TCP Client
         /// </summary>
-        public class TcpClient : Interfaces.INetworkReader, Interfaces.INetworkWriter
+        public class TcpClient : Interfaces.INetworkReader, Interfaces.INetworkWriter, Interfaces.INetworkSocket
         {
             /// <summary>
             /// The endpoint to connect to
@@ -1363,7 +1967,8 @@ namespace NetLib
                 if (IgnoreCertificateWarning) // Ignore certificate warnings
                 {
                     //Define a new callback for validation
-                    ServicePointManager.ServerCertificateValidationCallback = new System.Net.Security.RemoteCertificateValidationCallback((sender, cert, chain, errors) => {
+                    ServicePointManager.ServerCertificateValidationCallback = new System.Net.Security.RemoteCertificateValidationCallback((sender, cert, chain, errors) =>
+                    {
                         return true; // Return true, without any validation
                     });
                 }
@@ -1595,6 +2200,45 @@ namespace NetLib
                 /// String buffer for reading lines
                 /// </summary>
                 public StringBuilder lineRecvResult;
+            }
+
+            /// <summary>
+            /// A random value generated first when the generator is called, and incremented later
+            /// </summary>
+            public static int randomIncrementor = 0;
+            /// <summary>
+            /// The process id of the executing assembly loaded when the generator is called
+            /// </summary>
+            public static int currentPID = 0;
+
+            /// <summary>
+            /// Generate a runtime unique ID
+            /// </summary>
+            /// <returns>A unique ID to the current runtime</returns>
+            public static string GenerateID()
+            {
+                TimeSpan epochTime = DateTime.UtcNow - new DateTime(1970, 1, 1); // Calculate the epoch time
+                int milliSeconds = (int)epochTime.TotalMilliseconds; // Get the ms of the epoch time
+                if (randomIncrementor == 0) // If the random incrementor isn't initialized
+                {
+                    System.Security.Cryptography.RNGCryptoServiceProvider rng = new System.Security.Cryptography.RNGCryptoServiceProvider(); // Get the rng service
+                    byte[] data = new byte[32]; // Create buffer for the result
+                    rng.GetBytes(data); // Get the rng values
+                    foreach (byte random in data) // Loop through the bytes
+                    {
+                        randomIncrementor += random; // Append the bytes to the incrementor
+                    }
+                }
+
+                if (currentPID == 0) // If the PPID isn't initialized
+                {
+                    currentPID = System.Diagnostics.Process.GetCurrentProcess().Id; // Get the current PID
+                }
+
+                int randomInteger = randomIncrementor + milliSeconds + currentPID; // Add the random values together
+                string randomValue = randomInteger.ToString("X"); // Convert them to a hex string
+                randomIncrementor++; // Increment the incrementor
+                return randomValue; // Return the random value
             }
         }
 
