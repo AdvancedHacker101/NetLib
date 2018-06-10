@@ -9,6 +9,7 @@ using System.Net; // Basic networking objects
 using System.Net.Sockets; // Sockets
 using System.Security.Cryptography.X509Certificates; // Certificate parsing
 using System.Collections.Generic;
+using NetLib.Interfaces;
 
 /// <summary>
 /// Network Library
@@ -20,6 +21,148 @@ namespace NetLib
     /// </summary>
     namespace Interfaces
     {
+        /// <summary>
+        /// Class for building augmentations
+        /// </summary>
+        public class Augmentation
+        {
+            /// <summary>
+            /// Disable default ctonsole messages
+            /// </summary>
+            protected bool disableConsole = true;
+
+            /// <summary>
+            /// Override this method to modify bytes before sending them
+            /// </summary>
+            /// <param name="data">The bytes to be sent currently</param>
+            /// <returns>The bytes to send (default: no changes)</returns>
+            public virtual Tuple<byte[], int, int> OnBeforeSendBytes(byte[] data, int offset, int length)
+            {
+                if (!disableConsole) Console.WriteLine("Before sending bytes");
+                return new Tuple<byte[], int, int>(data, offset, length);
+            }
+
+            /// <summary>
+            /// Override this method to inspect sent bytes
+            /// </summary>
+            /// <param name="data">The bytes sent</param>
+            public virtual void OnAfterSendBytes(byte[] data, int offset, int length)
+            {
+                if (!disableConsole) Console.WriteLine("After bytes sent");
+            }
+
+            /// <summary>
+            /// Override this method to modify string before sending them
+            /// </summary>
+            /// <param name="data">The string to be sent currently</param>
+            /// <param name="encoding">The encoding used to construct the string</param>
+            /// <returns>The string to send (default: no changes)</returns>
+            public virtual string OnBeforeSendString(string data, Encoding encoding)
+            {
+                if (!disableConsole) Console.WriteLine("Before sending string");
+                return data;
+            }
+
+            /// <summary>
+            /// Override this method to inspect sent strings
+            /// </summary>
+            /// <param name="data">The string sent</param>
+            /// <param name="encoding">The encoding used to construct the string</param>
+            public virtual void OnAfterSendString(string data, Encoding encoding)
+            {
+                if (!disableConsole) Console.WriteLine("After string sent");
+            }
+
+            /// <summary>
+            /// Override this method to receive the socket start event
+            /// </summary>
+            public virtual void OnStart()
+            {
+                if (!disableConsole) Console.WriteLine("Socket started");
+            }
+
+            /// <summary>
+            /// Override this method to receive the socket stop event
+            /// </summary>
+            public virtual void OnStop()
+            {
+                if (!disableConsole) Console.WriteLine("Socket stopped");
+            }
+
+            /// <summary>
+            /// Override this method to receive the augmentation install event
+            /// </summary>
+            public virtual void OnInstalled()
+            {
+                if (!disableConsole) Console.WriteLine("Augment installed");
+            }
+
+            /// <summary>
+            /// Override this method to receive the augmentation uninstall event
+            /// </summary>
+            public virtual void OnUninstalled()
+            {
+                if (!disableConsole) Console.WriteLine("Augment Uninstalled");
+            }
+
+            /// <summary>
+            /// Override this method to modify the bytes received before processing them
+            /// </summary>
+            /// <param name="data">The bytes received</param>
+            /// <returns>The bytes to process (default: no changes)</returns>
+            public virtual byte[] OnBeforeReceiveBytes(byte[] data)
+            {
+                if (!disableConsole) Console.WriteLine("Before reading bytes");
+                return data;
+            }
+
+            /// <summary>
+            /// Override this method to instpect the bytes received
+            /// </summary>
+            /// <param name="data">The bytes received</param>
+            public virtual void OnAfterReceiveBytes(byte[] data)
+            {
+                if (!disableConsole) Console.WriteLine("After reading bytes");
+            }
+
+            /// <summary>
+            /// Override this method to modify the string received before processing them
+            /// </summary>
+            /// <param name="data">The string received</param>
+            /// <param name="encoding">The encoding used to construct the string</param>
+            /// <returns>The string to process</returns>
+            public virtual string OnBeforeReceiveString(string data, Encoding encoding)
+            {
+                if (!disableConsole) Console.WriteLine("Before reading string");
+                return data;
+            }
+
+            /// <summary>
+            /// Override this method to inspect the string received
+            /// </summary>
+            /// <param name="data">The received string</param>
+            /// <param name="encoding">The encoding used to construct the string</param>
+            public virtual void OnAfterReceiveString(string data, Encoding encoding)
+            {
+                if (!disableConsole) Console.WriteLine("After reading string");
+            }
+        }
+
+        /// <summary>
+        /// Implement augmentation functionallity
+        /// </summary>
+        interface IAugmentable
+        {
+            /// <summary>
+            /// Install the augmentation
+            /// </summary>
+            void InstallAugmentation(Augmentation a);
+            /// <summary>
+            /// Uninstall the augmentation
+            /// </summary>
+            void UninstallAugmentation(Augmentation a);
+        }
+
         /// <summary>
         /// Basic network connection functionallity
         /// </summary>
@@ -278,6 +421,161 @@ namespace NetLib
     }
 
     /// <summary>
+    /// Augmentations for sockets
+    /// </summary>
+    namespace Augmentations
+    {
+        /// <summary>
+        /// Basic I/O Bytes Traffic counter
+        /// </summary>
+        public class Counter : Augmentation
+        {
+            /// <summary>
+            /// The total number of bytes sent since the start/resume/reset of this counter
+            /// </summary>
+            public int TotalBytesSent { get; private set; } = 0;
+            /// <summary>
+            /// The total number of bytes received since the start/resume/reset of this counter
+            /// </summary>
+            public int TotalBytesReceived { get; private set; } = 0;
+            /// <summary>
+            /// Indicates if the counter's paused
+            /// </summary>
+            protected bool isPaused = false;
+
+            /// <summary>
+            /// Create a new counter
+            /// </summary>
+            public Counter()
+            {
+                disableConsole = true; // Set the console to disabled
+                Console.WriteLine("Counter constructed"); // Wrtie debug message to the console
+            }
+
+            /// <summary>
+            /// Decimal trim a float without rounding it
+            /// </summary>
+            /// <param name="numberOfDecimals">The number of decimal places to keep</param>
+            /// <param name="value">The float to format</param>
+            /// <returns>The formatted string value of the float</returns>
+            private string GetLastDecimals(int numberOfDecimals, float value)
+            {
+                string v = value.ToString(); // Convert the float to string
+                string separator = ""; // Define the decimal separator
+                if (v.Contains(".")) separator = "."; // Dot is the separator
+                else if (v.Contains(",")) separator = ","; // Colon is the separator
+                else return v; // No separator, round number, return it
+                int indexOf = v.IndexOf(separator); // Get the index of the separator
+                return v.Substring(0, indexOf + 1 + numberOfDecimals); // Return the formatted float
+            }
+
+            /// <summary>
+            /// Format raw byte count to string
+            /// </summary>
+            /// <param name="input">The input number of bytes</param>
+            /// <returns>The formatted string</returns>
+            public string FormatBytes(int input)
+            {
+                const float kb = 1024; // KB bottom limit
+                const float mb = kb * 1024; // MB bottom limit
+                const float gb = mb * 1024; // GB bottom limit
+                float bytes = input; // Float version of the input
+
+                if (bytes < kb) // Under KB
+                {
+                    return $"{bytes} B"; // Return as it is
+                }
+                else if (bytes >= kb && bytes < mb) // In KB Range
+                {
+                    return $"{GetLastDecimals(2, bytes / kb)} KB"; // Return the KB formatted string
+                }
+                else if (bytes >= mb && bytes < gb) // In MB Range
+                {
+                    return $"{GetLastDecimals(2, bytes / mb)} MB"; // Return the MB formatted string
+                }
+                else // Out of default range, assuming GB (not hangling TB, PB)
+                {
+                    return $"{GetLastDecimals(2, bytes / gb)} GB"; // Return the GB formatted string
+                }
+            }
+
+            /// <summary>
+            /// Count sent bytes
+            /// </summary>
+            /// <param name="sentBytes">The sent bytes</param>
+            public override void OnAfterSendBytes(byte[] sentBytes, int offset, int length)
+            {
+                if (!isPaused) TotalBytesSent += sentBytes.Length; // Add the bytes
+            }
+
+            /// <summary>
+            /// Count read bytes
+            /// </summary>
+            /// <param name="readBytes">The read bytes</param>
+            public override void OnAfterReceiveBytes(byte[] readBytes)
+            {
+                if (!isPaused) TotalBytesReceived += readBytes.Length; // Add the bytes
+            }
+
+            /// <summary>
+            /// Get the bytes length for string values
+            /// </summary>
+            /// <param name="value">The string to get the byte length of</param>
+            /// <param name="e">The encoding of the string</param>
+            /// <returns>The length of the byte array generated from the string</returns>
+            private int GetStringBytesLenght(string value, Encoding e)
+            {
+                return e.GetByteCount(value); // Return the number of bytes in the string
+            }
+
+            /// <summary>
+            /// Count read strings
+            /// </summary>
+            /// <param name="readString">The read string</param>
+            /// <param name="encoding">The encoding of the string</param>
+            public override void OnAfterReceiveString(string readString, Encoding encoding)
+            {
+                if (!isPaused) TotalBytesReceived += GetStringBytesLenght(readString, encoding); // Add the bytes
+            }
+
+            /// <summary>
+            /// Count sent strings
+            /// </summary>
+            /// <param name="sentString">The sent string</param>
+            /// <param name="encoding">The encoding of the string</param>
+            public override void OnAfterSendString(string sentString, Encoding encoding)
+            {
+                if (!isPaused) TotalBytesSent += GetStringBytesLenght(sentString, encoding); // Add the bytes
+            }
+
+            /// <summary>
+            /// Reset both counters back to 0
+            /// </summary>
+            public void ResetCounter()
+            {
+                TotalBytesReceived = 0; // Reset the read counter
+                TotalBytesSent = 0; // Reset the send counter
+            }
+
+            /// <summary>
+            /// Pause counting the bytes
+            /// </summary>
+            public void PauseCounter()
+            {
+                isPaused = true; // Pause the counting
+            }
+
+            /// <summary>
+            /// Resume counting the bytes
+            /// </summary>
+            public void ResumeCounter()
+            {
+                isPaused = false;
+            }
+        }
+    }
+
+    /// <summary>
     /// Socket Servers
     /// </summary>
     namespace Servers
@@ -285,7 +583,7 @@ namespace NetLib
         /// <summary>
         /// Single Client Tcp Server
         /// </summary>
-        public class SingleTcpServer : Interfaces.INetworkReader, Interfaces.INetworkWriter, Interfaces.INetworkSocket, Interfaces.INetworkServer
+        public class SingleTcpServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer, IAugmentable
         {
             /// <summary>
             /// The socket of the server
@@ -335,6 +633,10 @@ namespace NetLib
             /// Event listener for client connection
             /// </summary>
             protected event Action ClientConnected;
+            /// <summary>
+            /// List of installed augmentations
+            /// </summary>
+            protected List<Augmentation> augmentations = new List<Augmentation>();
 
             /// <summary>
             /// Init the server
@@ -380,6 +682,7 @@ namespace NetLib
                 {
                     Socket clientSocket = serverSocket.Accept(); // Accept the pending client
                     client = new Clients.TcpClient(clientSocket); // Wrap the clinet in the NetLib tcp client class
+                    augmentations.ForEach((aug) => client.InstallAugmentation(aug));
                     // Set client data
                     client.SetReceiveEncoding(recvEncoder);
                     client.SetReceiveNewLine(readNewLine);
@@ -392,6 +695,7 @@ namespace NetLib
                 });
                 t.Start(); // Start listening
                 serverOffline = false; // Server's running
+                augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to installed augmentations
             }
 
             /// <summary>
@@ -413,7 +717,7 @@ namespace NetLib
             public byte[] DirectRead(int maxSize)
             {
                 WaitForClient(); // Wait for the client to connect
-                return client.DirectRead(maxSize); // Use the wrapped client to read from the stream
+                return client.DirectRead(maxSize); // Use the wrapped client to read from the stream and return the bytes read
             }
 
             /// <summary>
@@ -423,7 +727,7 @@ namespace NetLib
             public string ReadLine()
             {
                 WaitForClient(); // Wait for the clinet to connect
-                return client.ReadLine(); // Use the wrapped client to read new lines
+                return client.ReadLine(); // Use the wrapped client to read new lines and return them
             }
 
             /// <summary>
@@ -433,7 +737,7 @@ namespace NetLib
             /// <returns>The bytes read from the stream</returns>
             public async Task<byte[]> DirectReadAsync(int maxSize)
             {
-                return await client.DirectReadAsync(maxSize); // Wait for the function to complete and return
+                return await client.DirectReadAsync(maxSize); // Wait for the function to complete and return the bytes
             }
 
             /// <summary>
@@ -442,7 +746,7 @@ namespace NetLib
             /// <returns>The line read from the stream</returns>
             public async Task<string> ReadLineAsync()
             {
-                return await client.ReadLineAsync(); // Wait for the function to complete
+                return await client.ReadLineAsync(); // Wait for the function to complete and return the new line
             }
 
             /// <summary>
@@ -480,6 +784,7 @@ namespace NetLib
             /// </summary>
             public void GracefulStop()
             {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
                 GracefulCloseClient(); // Close the client
                 ServerClose(); // Close the server
@@ -492,6 +797,7 @@ namespace NetLib
             /// </summary>
             public void ForceStop()
             {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
                 ForceCloseClient(); // Force close the client
                 ServerClose(); // Close the server
@@ -620,12 +926,34 @@ namespace NetLib
             {
                 ClientConnected += callback; // Add the callback to the event
             }
+
+            /// <summary>
+            /// Install an augmentation to the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to install</param>
+            public void InstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Add(augmentation); // Add the augmentation to the list
+                augmentation.OnInstalled(); // Notify the augmentation of the installation
+                if (client != null) client.InstallAugmentation(augmentation); // Proxy to the client
+            }
+
+            /// <summary>
+            /// Unintall an installed augmentation from the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to uninstall</param>
+            public void UninstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Remove(augmentation); // Remote the augmentation from the list
+                augmentation.OnUninstalled(); // Notify the augmentation of the installation
+                if (client != null) client.UninstallAugmentation(augmentation); // Proxy to the client
+            }
         }
 
         /// <summary>
         /// Single Client SSL Server
         /// </summary>
-        public class SingleSSLServer : Interfaces.INetworkReader, Interfaces.INetworkWriter, Interfaces.INetworkSocket, Interfaces.INetworkServer
+        public class SingleSSLServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer
         {
             /// <summary>
             /// The server socket
@@ -1041,7 +1369,10 @@ namespace NetLib
             }
         }
 
-        public class MultiTcpServer : Interfaces.INetworkMultiReader, Interfaces.INetworkMultiWriter, Interfaces.INetworkSocket, Interfaces.INetworkMultiServer
+        /// <summary>
+        /// Multi socket Tcp Server
+        /// </summary>
+        public class MultiTcpServer : Interfaces.INetworkMultiReader, Interfaces.INetworkMultiWriter, INetworkSocket, Interfaces.INetworkMultiServer
         {
             /// <summary>
             /// The socket of the server
@@ -1427,7 +1758,7 @@ namespace NetLib
             /// <param name="newLine">The new line terminator to use</param>
             public void SetSendNewLine(string newLine)
             {
-                writeNewLine = newLine;
+                writeNewLine = newLine; // Set the line terminator for sending
             }
 
             /// <summary>
@@ -1449,7 +1780,7 @@ namespace NetLib
         /// <summary>
         /// Basic TCP Client
         /// </summary>
-        public class TcpClient : Interfaces.INetworkReader, Interfaces.INetworkWriter, Interfaces.INetworkSocket
+        public class TcpClient : INetworkReader, INetworkWriter, INetworkSocket, IAugmentable
         {
             /// <summary>
             /// The endpoint to connect to
@@ -1499,6 +1830,14 @@ namespace NetLib
             /// Event for client disconnect notifications
             /// </summary>
             protected event Action ClientStopped;
+            /// <summary>
+            /// A list of installed augmentations
+            /// </summary>
+            protected List<Augmentation> augmentations = new List<Augmentation>();
+            /// <summary>
+            /// Indicates if a server socket created this client
+            /// </summary>
+            protected bool fromServer = false;
 
             /// <summary>
             /// Init the client
@@ -1555,6 +1894,7 @@ namespace NetLib
             /// <param name="clientSocket">The existing socket to wrap around</param>
             public TcpClient(Socket clientSocket)
             {
+                fromServer = true;
                 ClientInit(); // Init the client
                 client = clientSocket; // Set the socket
                 clientEndPoint = (IPEndPoint)client.LocalEndPoint; // Get the endpoint
@@ -1571,6 +1911,7 @@ namespace NetLib
 #endif
                 client.Connect(clientEndPoint); // Connect to the endpoint
                 clientOffline = false; // The client is running now
+                if (!fromServer) augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to augmentations if we're not created from a server class
             }
 
             /// <summary>
@@ -1587,6 +1928,9 @@ namespace NetLib
                 int bytesRead = client.Receive(buffer, 0, maxSize, SocketFlags.None); // Read bytes from the stream
                 byte[] dataBuffer = new byte[bytesRead]; // Define data buffer
                 Array.Copy(buffer, dataBuffer, bytesRead); // Copy the bytes read from the stream
+
+                augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentation inspect the data
 
                 return dataBuffer; // Return the bytes read from the stream
             }
@@ -1611,8 +1955,12 @@ namespace NetLib
                     result.Append(subResult); // Append to the total result
                     if (subResult.EndsWith(readNewLine)) break; // If the data ends with a new line, return it
                 }
+                string res = result.ToString();
 
-                return result.ToString(); // Return the constructed line from the connection
+                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+
+                return res; // Return the constructed line from the connection
             }
 
             /// <summary>
@@ -1693,7 +2041,10 @@ namespace NetLib
             /// <returns>The task with the resulting bytes</returns>
             public async Task<byte[]> DirectReadAsync(int maxSize)
             {
-                return await Task<byte[]>.Factory.StartNew(() => DirectRead(maxSize)).ConfigureAwait(false); // Wait for the task to finish
+                byte[] data = await Task<byte[]>.Factory.StartNew(() => DirectRead(maxSize)).ConfigureAwait(false); // Wait for the task to finish
+                augmentations.ForEach((aug) => data = aug.OnBeforeReceiveBytes(data)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(data)); // Let the augmentation inspect the data
+                return data; // Return the data
             }
 
             /// <summary>
@@ -1702,7 +2053,10 @@ namespace NetLib
             /// <returns>The task with the resulting new line</returns>
             public async Task<string> ReadLineAsync()
             {
-                return await Task<string>.Factory.StartNew(ReadLine).ConfigureAwait(false); // Wait for the task to finish
+                string res = await Task<string>.Factory.StartNew(ReadLine).ConfigureAwait(false); // Wait for the task to finish
+                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                return res; // Return the data
             }
 
             /// <summary>
@@ -1728,14 +2082,23 @@ namespace NetLib
                     byte[] dataBuffer = new byte[bytesRead]; // Define data buffer
                     Array.Copy(readObject.buffer, dataBuffer, bytesRead); // Copy the bytes read to the data buffer
 
-                    if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.DataRecv) DataReceived?.Invoke(dataBuffer); // Invoke the data received event
+                    if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.DataRecv)
+                    {
+                        augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
+                        augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentation inspect the data
+                        DataReceived?.Invoke(dataBuffer); // Invoke the data received event
+                    }
+
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
                     {
                         string subResult = recvEncoder.GetString(dataBuffer, 0, bytesRead); // Decode the data
                         readObject.lineRecvResult.Append(subResult); // Append the result to the string buffer
                         if (subResult.EndsWith(readNewLine)) // Check for line ending
                         {
-                            LineReceived?.Invoke(readObject.lineRecvResult.ToString()); // Invoke the callback
+                            string res = readObject.lineRecvResult.ToString();
+                            augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
+                            augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                            LineReceived?.Invoke(res); // Invoke the callback
                             readObject.lineRecvResult.Clear(); // Clear out the string buffer
                         }
                     }
@@ -1787,6 +2150,7 @@ namespace NetLib
             /// </summary>
             public void GracefulStop()
             {
+                if (!fromServer) augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations if we're not created from server
                 if (clientOffline) return; // Return if the client isn't running
 #if Validation_soft // Important check
                 if (client == null) throw new InvalidOperationException("Cannot close an offline client"); // The client isn't started
@@ -1806,6 +2170,7 @@ namespace NetLib
             /// </summary>
             public void ForceStop()
             {
+                if (!fromServer) augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations if we're not created from server
                 if (clientOffline) return; // Check if the client isn't running
 #if Validation_soft // Important check
                 if (client == null) throw new InvalidOperationException("Cannot close an offline client"); // Client isn't running
@@ -1847,6 +2212,16 @@ namespace NetLib
 #if Validation_soft // Important check
                 if (client == null || !client.Connected) throw new InvalidOperationException("Cannot send data from an offline client"); // Check if the client's offline
 #endif
+                augmentations.ForEach((aug) =>
+                {
+                    Tuple<byte[], int, int> result = aug.OnBeforeSendBytes(buffer, offset, length); // Let the augmentations modify the data
+                    // Unpack the tuple
+                    buffer = result.Item1;
+                    offset = result.Item2;
+                    length = result.Item3;
+                });
+
+                augmentations.ForEach((aug) => aug.OnAfterSendBytes(buffer, offset, length)); // Let the augmentations inspect the data
                 client.Send(buffer, offset, length, SocketFlags.None); // Send the bytes to the stream
             }
 
@@ -1856,6 +2231,8 @@ namespace NetLib
             /// <param name="data">The line to write to the stream</param>
             public void WriteLine(string data)
             {
+                augmentations.ForEach((aug) => data = aug.OnBeforeSendString(data, sendEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterSendString(data, sendEncoder)); // Let the augmentations inspect the data
                 byte[] sendBuffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to bytes
                 DirectWrite(sendBuffer, 0, sendBuffer.Length); // Write the bytes to the stream
             }
@@ -1876,6 +2253,26 @@ namespace NetLib
             public void SetSendNewLine(string newLine)
             {
                 writeNewLine = newLine; // Set the line terminator
+            }
+
+            /// <summary>
+            /// Install an augmentation to the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to install</param>
+            public void InstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Add(augmentation); // Add the augmentation to the list
+                if (!fromServer) augmentation.OnInstalled(); // Notify the augmentation of the installation
+            }
+
+            /// <summary>
+            /// Unintall an installed augmentation from the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to uninstall</param>
+            public void UninstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Remove(augmentation); // Remote the augmentation from the list
+                if (!fromServer) augmentation.OnUninstalled(); // Notify the augmentation of the installation
             }
         }
 
