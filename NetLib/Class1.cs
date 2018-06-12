@@ -1,4 +1,5 @@
 ﻿#define Validation_hard // Enable Hard, strict error cheking, may throw error even when the program will probably work fine
+#define Logging_verbose // Enable verbose logging of errors
 #if Validation_hard // When hard validation is enabled it will also enable soft validation
 #define Validation_soft // Will throw the same errors but a with a little more userfriendly message as the program would without try catching would
 #endif
@@ -1396,7 +1397,7 @@ namespace NetLib
         /// <summary>
         /// Multi socket Tcp Server
         /// </summary>
-        public class MultiTcpServer : Interfaces.INetworkMultiReader, Interfaces.INetworkMultiWriter, INetworkSocket, Interfaces.INetworkMultiServer
+        public class MultiTcpServer : INetworkMultiReader, INetworkMultiWriter, INetworkSocket, INetworkMultiServer, IAugmentable
         {
             /// <summary>
             /// The socket of the server
@@ -1442,6 +1443,10 @@ namespace NetLib
             /// Event listener for when a client is disconnected
             /// </summary>
             protected event Action<string> ClientDisconnected;
+            /// <summary>
+            /// A list of installed augmentations
+            /// </summary>
+            protected List<Augmentation> augmentations = new List<Augmentation>();
 
             /// <summary>
             /// Init the server
@@ -1494,8 +1499,9 @@ namespace NetLib
 #endif
                         }
                         Clients.TcpClient client = new Clients.TcpClient(clientSocket); // Wrap the clinet in the NetLib tcp client class
+                        augmentations.ForEach((aug) => client.InstallAugmentation(aug)); // Install the current augmentation to the new client
                         string clientID = Utils.NetworkIO.GenerateID(); // Generate the runtime unique ID of the client
-                                                                        // Set client data
+                        // Set client data
                         client.SetReceiveEncoding(recvEncoder);
                         client.SetReceiveNewLine(readNewLine);
                         client.SetReceiveSize(recvSize);
@@ -1511,6 +1517,7 @@ namespace NetLib
                 });
                 serverOffline = false; // Server's running
                 t.Start(); // Start listening
+                augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to the augmentations
             }
 
             /// <summary>
@@ -1549,7 +1556,7 @@ namespace NetLib
                 if (tuple == null) // If not found
                 {
 #if Validation_hard // Not so important check
-                    throw new ArgumentException("The specified clientID isn't existing");
+                    throw new ArgumentException("The specified clientID doesn't exist");
 #else
                     return null;
 #endif
@@ -1645,6 +1652,7 @@ namespace NetLib
             /// </summary>
             public void GracefulStop()
             {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
                 foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the connected clients
                 {
@@ -1659,6 +1667,7 @@ namespace NetLib
             /// </summary>
             public void ForceStop()
             {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
                 foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the connected clients
                 {
@@ -1793,9 +1802,39 @@ namespace NetLib
             {
                 ClientDisconnected += callback; // Add the callback to the event
             }
+
+            /// <summary>
+            /// Install an augmentation to the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to install</param>
+            public void InstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Add(augmentation); // Add the augmentation to the list
+                augmentation.OnInstalled(); // Notify the augmentation of the installation
+                
+                foreach (Tuple<string, Clients.TcpClient> clientData in clients) // Go through the connected clients
+                {
+                    clientData.Item2.InstallAugmentation(augmentation); // Install the augmentation to the current client
+                }
+            }
+
+            /// <summary>
+            /// Unintall an installed augmentation from the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to uninstall</param>
+            public void UninstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Remove(augmentation); // Remote the augmentation from the list
+                augmentation.OnUninstalled(); // Notify the augmentation of the installation
+
+                foreach (Tuple<string, Clients.TcpClient> clientData in clients) // Go through the connected clients
+                {
+                    clientData.Item2.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
+                }
+            }
         }
     }
-    
+
     namespace Clients
     {
         /// <summary>
@@ -2088,6 +2127,10 @@ namespace NetLib
                 }
                 catch (Exception ex) // Something went wrong
                 {
+#if Logging_verbose
+                    Console.WriteLine("Stopping client due to a read error from the socket");
+                    Console.WriteLine(ex);
+#endif
                     ForceStop(); // Stop the client
                     return; // Return
                 }
@@ -2425,6 +2468,10 @@ namespace NetLib
                 }
                 catch (Exception ex) // Something went wrong
                 {
+#if Logging_verbose
+                    Console.WriteLine("Stopping client due to a read error from the socket");
+                    Console.WriteLine(ex);
+#endif
                     ForceStop(); // Stop the client
                     return; // Return
                 }
@@ -2839,6 +2886,10 @@ namespace NetLib
                 }
                 catch (ArgumentException ex) // The hostname isn't valid
                 {
+#if Logging_verbose
+                    Console.WriteLine("Hostname resolvation failed, due to the following exception:");
+                    Console.WriteLine(ex);
+#endif
                     return new Tuple<bool, IPAddress>(false, null); // Return false and null for the IP Address
                 }
             }
