@@ -11,14 +11,8 @@ using System.Security.Cryptography.X509Certificates; // Certificate parsing
 using System.Collections.Generic;
 using NetLib.Interfaces;
 
-/// <summary>
-/// Network Library
-/// </summary>
 namespace NetLib
 {
-    /// <summary>
-    /// Networking interfaces
-    /// </summary>
     namespace Interfaces
     {
         /// <summary>
@@ -35,6 +29,8 @@ namespace NetLib
             /// Override this method to modify bytes before sending them
             /// </summary>
             /// <param name="data">The bytes to be sent currently</param>
+            /// <param name="offset">The offset to start sending the bytes from</param>
+            /// <param name="length">The number of bytes to send</param>
             /// <returns>The bytes to send (default: no changes)</returns>
             public virtual Tuple<byte[], int, int> OnBeforeSendBytes(byte[] data, int offset, int length)
             {
@@ -46,6 +42,8 @@ namespace NetLib
             /// Override this method to inspect sent bytes
             /// </summary>
             /// <param name="data">The bytes sent</param>
+            /// <param name="offset">The offset to start sending the bytes from</param>
+            /// <param name="length">The number of bytes to send</param>
             public virtual void OnAfterSendBytes(byte[] data, int offset, int length)
             {
                 if (!disableConsole) Console.WriteLine("After bytes sent");
@@ -420,9 +418,6 @@ namespace NetLib
         }
     }
 
-    /// <summary>
-    /// Augmentations for sockets
-    /// </summary>
     namespace Augmentations
     {
         /// <summary>
@@ -503,6 +498,8 @@ namespace NetLib
             /// Count sent bytes
             /// </summary>
             /// <param name="sentBytes">The sent bytes</param>
+            /// <param name="offset">The offset to start sending the bytes from</param>
+            /// <param name="length">The number of bytes to send from the array</param>
             public override void OnAfterSendBytes(byte[] sentBytes, int offset, int length)
             {
                 if (!isPaused) TotalBytesSent += sentBytes.Length; // Add the bytes
@@ -575,9 +572,6 @@ namespace NetLib
         }
     }
 
-    /// <summary>
-    /// Socket Servers
-    /// </summary>
     namespace Servers
     {
         /// <summary>
@@ -953,7 +947,7 @@ namespace NetLib
         /// <summary>
         /// Single Client SSL Server
         /// </summary>
-        public class SingleSSLServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer
+        public class SingleSSLServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer, IAugmentable
         {
             /// <summary>
             /// The server socket
@@ -1011,6 +1005,10 @@ namespace NetLib
             /// Event listener when the client disconnects
             /// </summary>
             protected event Action ClientDisconnected;
+            /// <summary>
+            /// A list to keep installed augmentations in
+            /// </summary>
+            protected List<Augmentation> augmentations = new List<Augmentation>();
 
             /// <summary>
             /// Init the server
@@ -1114,6 +1112,7 @@ namespace NetLib
                         System.Net.Security.SslStream clientStream = new System.Net.Security.SslStream(clientNS); // Wrap the stream inside the ssl stream class
                         clientStream.AuthenticateAsServer(sslParams.certificate, false, sslParams.protocols, true); // Authenticate as the server
                         client = new Clients.SSLClient(clientStream); // Wrap the client in the SSL Client class
+                        augmentations.ForEach((aug) => client.InstallAugmentation(aug)); // Install existing augmentations to the new client
                         // Setup the client
                         client.SetReceiveEncoding(recvEncoder);
                         client.SetReceiveNewLine(readNewLine);
@@ -1139,6 +1138,7 @@ namespace NetLib
                 });
                 t.Start(); // Start listening
                 serverOffline = false; // The server's running
+                augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to the augmentations
             }
 
             /// <summary>
@@ -1236,6 +1236,7 @@ namespace NetLib
             /// </summary>
             public void GracefulStop()
             {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
                 GracefulCloseClient(); // Close the client
                 ServerClose(); // Close the server
@@ -1248,6 +1249,7 @@ namespace NetLib
             /// </summary>
             public void ForceStop()
             {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
                 ForceCloseClient(); // Close the client
                 ServerClose(); // Close the server
@@ -1366,6 +1368,28 @@ namespace NetLib
             public void AddEventClientDisconnected(Action callback)
             {
                 ClientDisconnected += callback; // Add callback to function
+            }
+
+            /// <summary>
+            /// Install an augmentation to the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to install</param>
+            public void InstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Add(augmentation); // Add the augmentation to the list
+                augmentation.OnInstalled(); // Notify the augmentation of the installation
+                if (client != null) client.InstallAugmentation(augmentation); // Proxy to the client
+            }
+
+            /// <summary>
+            /// Unintall an installed augmentation from the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to uninstall</param>
+            public void UninstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Remove(augmentation); // Remote the augmentation from the list
+                augmentation.OnUninstalled(); // Notify the augmentation of the installation
+                if (client != null) client.UninstallAugmentation(augmentation); // Proxy to the client
             }
         }
 
@@ -1586,7 +1610,7 @@ namespace NetLib
 
             /// <summary>
             /// Close the client gracefully
-            /// <param name="clientID">The ID of the client to read from</param>
+            /// <param name="client">The client to stop the connection with</param>
             /// </summary>
             private void GracefulCloseClient(Clients.TcpClient client)
             {
@@ -1597,7 +1621,7 @@ namespace NetLib
 
             /// <summary>
             /// Close the client forcefully
-            /// <param name="clientID">The ID of the client to read from</param>
+            /// <param name="client">The tcp client to close the connection with</param>
             /// </summary>
             private void ForceCloseClient(Clients.TcpClient client)
             {
@@ -1771,10 +1795,7 @@ namespace NetLib
             }
         }
     }
-
-    /// <summary>
-    /// Socket Clients
-    /// </summary>
+    
     namespace Clients
     {
         /// <summary>
@@ -2041,10 +2062,7 @@ namespace NetLib
             /// <returns>The task with the resulting bytes</returns>
             public async Task<byte[]> DirectReadAsync(int maxSize)
             {
-                byte[] data = await Task<byte[]>.Factory.StartNew(() => DirectRead(maxSize)).ConfigureAwait(false); // Wait for the task to finish
-                augmentations.ForEach((aug) => data = aug.OnBeforeReceiveBytes(data)); // Let the augmentations modify the data
-                augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(data)); // Let the augmentation inspect the data
-                return data; // Return the data
+                return await Task<byte[]>.Factory.StartNew(() => DirectRead(maxSize)).ConfigureAwait(false); // Wait for the task to finish and return it
             }
 
             /// <summary>
@@ -2053,10 +2071,7 @@ namespace NetLib
             /// <returns>The task with the resulting new line</returns>
             public async Task<string> ReadLineAsync()
             {
-                string res = await Task<string>.Factory.StartNew(ReadLine).ConfigureAwait(false); // Wait for the task to finish
-                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
-                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
-                return res; // Return the data
+                return await Task<string>.Factory.StartNew(ReadLine).ConfigureAwait(false); // Wait for the task to finish and return it
             }
 
             /// <summary>
@@ -2343,6 +2358,7 @@ namespace NetLib
             /// <param name="stream">The SSL Stream to wrap around</param>
             public SSLClient(System.Net.Security.SslStream stream)
             {
+                fromServer = true;
                 ClientInit(false); // Init the client
                 sslStream = stream; //Set the ssl stream
             }
@@ -2418,14 +2434,23 @@ namespace NetLib
                     byte[] dataBuffer = new byte[bytesRead]; // Define the data buffer
                     Array.Copy(readObject.buffer, dataBuffer, bytesRead); // Copy the bytes read to the data buffer
 
-                    if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.DataRecv) DataReceivedMethod(dataBuffer); // Invoke the data received event
+                    if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.DataRecv)
+                    {
+                        augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
+                        augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentations inspect the data
+                        DataReceivedMethod(dataBuffer); // Invoke the data received event
+                    }
+
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
                     {
                         string subResult = recvEncoder.GetString(dataBuffer, 0, bytesRead); // Encode the bytes to string
                         readObject.lineRecvResult.Append(subResult); // Appnend the data to the string buffer
                         if (subResult.EndsWith(readNewLine)) // Check if the buffer ends with the new line
                         {
-                            LineReceivedMethod(readObject.lineRecvResult.ToString()); // Invoke the new line event
+                            string res = readObject.lineRecvResult.ToString(); // Get the resulting string
+                            augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
+                            augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                            LineReceivedMethod(res); // Invoke the new line event
                             readObject.lineRecvResult.Clear(); // Clear the string buffer
                         }
                     }
@@ -2480,6 +2505,8 @@ namespace NetLib
                 int bytesRead = sslStream.Read(buffer, 0, maxSize); // Read from the stream
                 byte[] dataBuffer = new byte[bytesRead]; // Define the data buffer
                 Array.Copy(buffer, dataBuffer, bytesRead); // Copy the bytes read to the data buffer
+                augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentations inspect the data
                 return dataBuffer; // Return the data buffer
             }
 
@@ -2506,7 +2533,12 @@ namespace NetLib
                     if (subResult.EndsWith(readNewLine)) break; // Stop if a line has ended
                 }
 
-                return result.ToString(); // Return the current new line
+                string res = result.ToString(); // Get the resulting string
+
+                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+
+                return res; // Return the current new line
             }
 
             /// <summary>
@@ -2536,6 +2568,15 @@ namespace NetLib
             /// <param name="length">The number of bytes to write</param>
             public new void DirectWrite(byte[] buffer, int offset, int length)
             {
+                augmentations.ForEach((aug) =>
+                {
+                    Tuple<byte[], int, int> result = aug.OnBeforeSendBytes(buffer, offset, length); // Get the result
+                    // Unpack the tuple
+                    buffer = result.Item1;
+                    offset = result.Item2;
+                    length = result.Item3;
+                }); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterSendBytes(buffer, offset, length)); // Let the augmentations inspect the data
                 sslStream.Write(buffer, offset, length); // Write the bytes to the stream
             }
 
@@ -2545,6 +2586,8 @@ namespace NetLib
             /// <param name="data">The line to write out</param>
             public new void WriteLine(string data)
             {
+                augmentations.ForEach((aug) => data = aug.OnBeforeReceiveString(data, sendEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(data, sendEncoder)); // Let the augmentations inspect the data
                 byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
                 DirectWrite(buffer, 0, buffer.Length); // Write the bytes to the stream
             }
@@ -2563,9 +2606,6 @@ namespace NetLib
         }
     }
 
-    /// <summary>
-    /// Utilities for basic networking tasks
-    /// </summary>
     namespace Utils
     {
         /// <summary>
@@ -2578,10 +2618,22 @@ namespace NetLib
             /// </summary>
             public enum ReadEventCodes
             {
-                DataRecv, // Receive only data
-                LineRecv, // Receive only new lines
-                Both, // Receive both
-                Stopped // Receive nothing
+                /// <summary>
+                /// Receive only byte type data
+                /// </summary>
+                DataRecv,
+                /// <summary>
+                /// Receive only string new lines
+                /// </summary>
+                LineRecv,
+                /// <summary>
+                /// Receive byte type and string new line data
+                /// </summary>
+                Both,
+                /// <summary>
+                /// Don't receive data actively
+                /// </summary>
+                Stopped
             }
 
             /// <summary>
