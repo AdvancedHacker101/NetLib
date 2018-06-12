@@ -1833,6 +1833,479 @@ namespace NetLib
                 }
             }
         }
+
+        /// <summary>
+        /// Multi socket Tcp Server
+        /// </summary>
+        public class MultiSSLServer : INetworkMultiReader, INetworkMultiWriter, INetworkSocket, INetworkMultiServer, IAugmentable
+        {
+            /// <summary>
+            /// The socket of the server
+            /// </summary>
+            protected Socket serverSocket;
+            /// <summary>
+            /// The connected client's socket
+            /// </summary>
+            protected List<Tuple<string, Clients.SSLClient>> clients = new List<Tuple<string, Clients.SSLClient>>();
+            /// <summary>
+            /// The endpoint to run the server on
+            /// </summary>
+            protected IPEndPoint serverEndPoint;
+            /// <summary>
+            /// The size of the buffer to receive from the client
+            /// </summary>
+            protected int recvSize;
+            /// <summary>
+            /// The encoding used when receiving new lines
+            /// </summary>
+            protected Encoding recvEncoder;
+            /// <summary>
+            /// The encoding use when sending new lines
+            /// </summary>
+            protected Encoding sendEncoder;
+            /// <summary>
+            /// The new line terminator to read until
+            /// </summary>
+            protected string readNewLine;
+            /// <summary>
+            /// The new line terminator to send
+            /// </summary>
+            protected string writeNewLine;
+            /// <summary>
+            /// Indicates if the server's running
+            /// </summary>
+            protected bool serverOffline = true;
+            /// <summary>
+            /// Event listener for when a new client is connected
+            /// </summary>
+            protected event Action<string> ClientConnected;
+            /// <summary>
+            /// Event listener for when a client is disconnected
+            /// </summary>
+            protected event Action<string> ClientDisconnected;
+            /// <summary>
+            /// A list of installed augmentations
+            /// </summary>
+            protected List<Augmentation> augmentations = new List<Augmentation>();
+            /// <summary>
+            /// The SSL Parameters of the server
+            /// </summary>
+            protected Utils.SSL.ServerSSLData sslParams;
+
+            /// <summary>
+            /// Init the server
+            /// </summary>
+            /// <param name="ep">The endpoint to run the server on</param>
+            /// <param name="sslParameters">SSL Socket Server Parameters</param>
+            public MultiSSLServer(IPEndPoint ep, Utils.SSL.ServerSSLData sslParameters)
+            {
+                ServerInit(sslParameters);
+                serverEndPoint = ep;
+            }
+            /// <summary>
+            /// Init the server
+            /// </summary>
+            /// <param name="ep">The endpoint to run the server on</param>
+            /// <param name="certFilePath">The certification file to load into ssl sockets</param>
+            /// <param name="serverAddress">The address of this server (domain name specified in the cert file)</param>
+            /// <param name="protocols">The SSL Protocol to use during the handshake</param>
+            public MultiSSLServer(IPEndPoint ep, string certFilePath, string serverAddress, System.Security.Authentication.SslProtocols protocols)
+            {
+                ServerInit(Utils.SSL.ParseServerData(certFilePath, serverAddress, protocols));
+                serverEndPoint = ep;
+            }
+
+            /// <summary>
+            /// Init the server
+            /// </summary>
+            /// <param name="ep">The endpoint to run the server on</param>
+            /// <param name="certFilePath">The certification file to load into ssl sockets</param>
+            /// <param name="serverAddress">The address of this server (domain name specified in the cert file)</param>
+            public MultiSSLServer(IPEndPoint ep, string certFilePath, string serverAddress)
+            {
+                ServerInit(Utils.SSL.ParseServerData(certFilePath, serverAddress, Utils.SSL.defaultProtocols));
+                serverEndPoint = ep;
+            }
+
+            /// <summary>
+            /// Init the server
+            /// </summary>
+            private void ServerInit(Utils.SSL.ServerSSLData sslParameters)
+            {
+                clients.Clear(); // Clear the current client list
+                serverEndPoint = null; // Reset the current endpoint
+                serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new server socket
+                recvSize = 2048; // Init the read buffer size
+                sslParams = sslParameters; // Set the ssl protocol parameters
+            }
+
+            /// <summary>
+            /// Start the server
+            /// </summary>
+            public void Start()
+            {
+                serverSocket.Bind(serverEndPoint); // Bind to the specified endpoint
+                serverSocket.Listen(100); // Listen for max 100 pending connections
+                Task t = new Task(() =>
+                {
+                    while (!serverOffline)
+                    {
+                        Socket clientSocket = null;
+                        try
+                        {
+                            clientSocket = serverSocket.Accept(); // Accept the pending client
+                            if (serverOffline) break;
+                        }
+                        catch (Exception ex)
+                        {
+                            if (serverSocket == null)
+                            {
+                                Console.WriteLine("Error, when shutting down server, ignorable most likely");
+                                return;
+                            }
+
+#if Validation_soft // Important check
+                            throw new Exception("Failed to accept socket connection!", ex);
+#endif
+                        }
+                        NetworkStream ns = new NetworkStream(clientSocket); // Get the network stream of the socket
+                        System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(ns); // Wrap the stream in an ssl context
+                        sslStream.AuthenticateAsServer(sslParams.certificate, false, sslParams.protocols, true); // Authenticate as the server
+                        Clients.SSLClient client = new Clients.SSLClient(sslStream); // Wrap the clinet in the NetLib ssl client class
+                        augmentations.ForEach((aug) => client.InstallAugmentation(aug)); // Install the current augmentation to the new client
+                        string clientID = Utils.NetworkIO.GenerateID(); // Generate the runtime unique ID of the client
+                        // Set client data
+                        client.SetReceiveEncoding(recvEncoder);
+                        client.SetReceiveNewLine(readNewLine);
+                        client.SetReceiveSize(recvSize);
+                        client.SetSendEncoding(sendEncoder);
+                        client.SetSendNewLine(writeNewLine);
+                        // Construct the clientData
+                        Tuple<string, Clients.SSLClient> clientData = new Tuple<string, Clients.SSLClient>(clientID, client);
+                        // Add the client to the list
+                        clients.Add(clientData);
+                        client.AddEventClientStopped(() => ClientDisconnected?.Invoke(clientID));
+                        ClientConnected?.Invoke(clientID); // Fire the connection event 
+                    }
+                });
+                serverOffline = false; // Server's running
+                t.Start(); // Start listening
+                augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to the augmentations
+            }
+
+            /// <summary>
+            /// Add event listener for when a new client is connected
+            /// </summary>
+            /// <param name="callback">The function to call when a new client is connected</param>
+            public void AddEventClientConnected(Action<string> callback)
+            {
+                ClientConnected += callback; // Add the function to the event
+            }
+
+            /// <summary>
+            /// List the IDs of connected clients
+            /// </summary>
+            /// <returns>A string array filled with the ID of connected clients</returns>
+            public string[] ListClients()
+            {
+                List<string> localClients = new List<string>(); // Define a new list for the return value
+
+                foreach (Tuple<string, Clients.SSLClient> client in clients) // Go through the clients
+                {
+                    localClients.Add(client.Item1); // Add the ID of the clients
+                }
+
+                return localClients.ToArray(); // Return the client ID array
+            }
+
+            /// <summary>
+            /// Get the NetLib SSLClient instance from a client ID
+            /// </summary>
+            /// <param name="clientID">The ID of the client</param>
+            /// <returns>The NetLib SSL Client associated with the given ID</returns>
+            private Clients.SSLClient GetClientByID(string clientID)
+            {
+                Tuple<string, Clients.SSLClient> tuple = clients.Find((data) => data.Item1 == clientID); // Find the matching client
+                if (tuple == null) // If not found
+                {
+#if Validation_hard // Not so important check
+                    throw new ArgumentException("The specified clientID doesn't exist");
+#else
+                    return null;
+#endif
+                }
+
+                return tuple.Item2; // Return the client instance
+            }
+
+            /// <summary>
+            /// Read bytes from the stream
+            /// </summary>
+            /// <param name="maxSize">The number of maximum bytes to read</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The bytes read from the stream</returns>
+            public byte[] DirectRead(int maxSize, string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return new byte[] { }; // Return if the client isn't found and error's suppressed
+                return client.DirectRead(maxSize); // Use the wrapped client to read from the stream
+            }
+
+            /// <summary>
+            /// Read a line from the stram
+            /// </summary>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The line read from the stream</returns>
+            public string ReadLine(string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return ""; // Return if the client isn't found and error's suppressed
+                return client.ReadLine(); // Use the wrapped client to read new lines
+            }
+
+            /// <summary>
+            /// Read bytes from the stream async
+            /// </summary>
+            /// <param name="maxSize">The number of maximum bytes to read from the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The bytes read from the stream</returns>
+            public async Task<byte[]> DirectReadAsync(int maxSize, string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return null; // Return if the client isn't found and error's suppressed
+                return await client.DirectReadAsync(maxSize); // Wait for the function to complete and return
+            }
+
+            /// <summary>
+            /// Read a line from the stream async
+            /// </summary>
+            /// <param name="clientID">The ID of the client to read from</param>
+            /// <returns>The line read from the stream</returns>
+            public async Task<string> ReadLineAsync(string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return null; // Return if the client isn't found and error's suppressed
+                return await client.ReadLineAsync(); // Wait for the function to complete
+            }
+
+            /// <summary>
+            /// Close the client gracefully
+            /// <param name="client">The client to stop the connection with</param>
+            /// </summary>
+            private void GracefulCloseClient(Clients.SSLClient client)
+            {
+                if (client == null) return; // Check if the client is null
+                client.GracefulStop(); // Stop the client
+                client = null; // Reset the client
+            }
+
+            /// <summary>
+            /// Close the client forcefully
+            /// <param name="client">The ssl client to close the connection with</param>
+            /// </summary>
+            private void ForceCloseClient(Clients.SSLClient client)
+            {
+                if (client == null) return; // Check if the client is null
+                client.ForceStop(); // Close the client
+                client = null; // Reset the client
+            }
+
+            /// <summary>
+            /// Close the server
+            /// </summary>
+            private void ServerClose()
+            {
+                serverSocket.Close(); // Close the server socket
+                serverSocket.Dispose(); // Dispose the server socket
+                serverSocket = null; // Reset the server socket
+            }
+
+            /// <summary>
+            /// Close the server gracefully
+            /// </summary>
+            public void GracefulStop()
+            {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
+                if (serverOffline) return; // Check if the server's stopped
+                foreach (Tuple<string, Clients.SSLClient> client in clients) // Go through the connected clients
+                {
+                    GracefulCloseClient(client.Item2); // Close the client
+                }
+                ServerClose(); // Close the server
+                serverOffline = true; // The server's stopped
+            }
+
+            /// <summary>
+            /// Forcefully stop the server
+            /// </summary>
+            public void ForceStop()
+            {
+                augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
+                if (serverOffline) return; // Check if the server's stopped
+                foreach (Tuple<string, Clients.SSLClient> client in clients) // Go through the connected clients
+                {
+                    ForceCloseClient(client.Item2); // Force close the client
+                }
+                ServerClose(); // Close the server
+                serverOffline = true; // The server's stopped
+            }
+
+            /// <summary>
+            /// Add event listener for receiving bytes
+            /// </summary>
+            /// <param name="callback">The function to call when bytes are read from the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void AddEventDataReceived(Action<byte[]> callback, string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
+                client.AddEventDataReceived(callback); // Use the wrapped client to listen for bytes
+            }
+
+            /// <summary>
+            /// Add event listener for receiving new lines
+            /// </summary>
+            /// <param name="callback">The function to call when new lines are read from the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void AddEventLineReceived(Action<string> callback, string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
+                client.AddEventLineReceived(callback); // Use the wrapped client to listen for new lines
+            }
+
+            /// <summary>
+            /// Set the read encoding
+            /// </summary>
+            /// <param name="encoding">The encoding to decode bytes arrays with</param>
+            public void SetReceiveEncoding(Encoding encoding)
+            {
+                recvEncoder = encoding; // Set the encoding
+            }
+
+            /// <summary>
+            /// Set the maximum number of bytes to receive
+            /// </summary>
+            /// <param name="size">The number of bytes</param>
+            public void SetReceiveSize(int size)
+            {
+                recvSize = size; // Set the size
+            }
+
+            /// <summary>
+            /// Set the read line terminator
+            /// </summary>
+            /// <param name="newLine">The line terminator character</param>
+            public void SetReceiveNewLine(string newLine)
+            {
+                readNewLine = newLine; // Set the line terminator
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void DirectWrite(byte[] buffer, string clientID)
+            {
+                DirectWrite(buffer, 0, buffer.Length, clientID); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="offset">The offset to begin writing from</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void DirectWrite(byte[] buffer, int offset, string clientID)
+            {
+                DirectWrite(buffer, offset, buffer.Length - offset, clientID); // Write bytes to the stream
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="offset">The offset to begin writing from</param>
+            /// <param name="length">The number of bytes to write out</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void DirectWrite(byte[] buffer, int offset, int length, string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return; // Check if the client is null
+                client.DirectWrite(buffer, offset, length); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Write a line to the stream
+            /// </summary>
+            /// <param name="data">The line to write to the stream</param>
+            /// <param name="clientID">The ID of the client to read from</param>
+            public void WriteLine(string data, string clientID)
+            {
+                Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
+                if (client == null) return; // Check if the client is null
+                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
+                DirectWrite(buffer, clientID); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Set the encoding for writing new lines to the stream
+            /// </summary>
+            /// <param name="encoding">The encoding to use</param>
+            public void SetSendEncoding(Encoding encoding)
+            {
+                sendEncoder = encoding; // Set the encoding
+            }
+
+            /// <summary>
+            /// Set the new line terminator used when sending new lines
+            /// </summary>
+            /// <param name="newLine">The new line terminator to use</param>
+            public void SetSendNewLine(string newLine)
+            {
+                writeNewLine = newLine; // Set the line terminator for sending
+            }
+
+            /// <summary>
+            /// Add an event listener for when a client is disconnected
+            /// </summary>
+            /// <param name="callback">The function to call when the client disconnects</param>
+            public void AddEventClientDisconnected(Action<string> callback)
+            {
+                ClientDisconnected += callback; // Add the callback to the event
+            }
+
+            /// <summary>
+            /// Install an augmentation to the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to install</param>
+            public void InstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Add(augmentation); // Add the augmentation to the list
+                augmentation.OnInstalled(); // Notify the augmentation of the installation
+
+                foreach (Tuple<string, Clients.SSLClient> clientData in clients) // Go through the connected clients
+                {
+                    clientData.Item2.InstallAugmentation(augmentation); // Install the augmentation to the current client
+                }
+            }
+
+            /// <summary>
+            /// Unintall an installed augmentation from the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to uninstall</param>
+            public void UninstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Remove(augmentation); // Remote the augmentation from the list
+                augmentation.OnUninstalled(); // Notify the augmentation of the installation
+
+                foreach (Tuple<string, Clients.SSLClient> clientData in clients) // Go through the connected clients
+                {
+                    clientData.Item2.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
+                }
+            }
+        }
     }
 
     namespace Clients
