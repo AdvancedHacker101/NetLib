@@ -90,8 +90,9 @@ namespace NetLib
 
             /// <summary>
             /// Override this method to receive the augmentation install event
+            /// <param name="socket">The socket that's installing the augmentation</param>
             /// </summary>
-            public virtual void OnInstalled()
+            public virtual void OnInstalled(INetworkSocket socket)
             {
                 if (!disableConsole) Console.WriteLine("Augment installed");
             }
@@ -165,7 +166,7 @@ namespace NetLib
         /// <summary>
         /// Basic network connection functionallity
         /// </summary>
-        interface INetworkSocket
+        public interface INetworkSocket
         {
             /// <summary>
             /// Start the socket connection
@@ -179,6 +180,26 @@ namespace NetLib
             /// Forcefully stop the socket connection
             /// </summary>
             void ForceStop();
+            /// <summary>
+            /// The encoding used for sending string data
+            /// </summary>
+            Encoding SendEncoder { get; set; }
+            /// <summary>
+            /// The encoding used for reading string data
+            /// </summary>
+            Encoding RecvEncoder { get; set; }
+            /// <summary>
+            /// The new line terminator to use when sending strings
+            /// </summary>
+            string WriteNewLine { get; set; }
+            /// <summary>
+            /// The new line terminator to use when receiving strings
+            /// </summary>
+            string ReadNewLine { get; set; }
+            /// <summary>
+            /// The maximum size of the receive buffer
+            /// </summary>
+            int RecvSize { get; set; }
         }
 
         /// <summary>
@@ -247,21 +268,6 @@ namespace NetLib
             /// <param name="callback">The function to call when lines are received</param>
             void AddEventLineReceived(Action<string> callback);
             /// <summary>
-            /// Set the encoding used to decode bytes back to string
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            void SetReceiveEncoding(Encoding encoding);
-            /// <summary>
-            /// Set the size of the buffer to read from the stream
-            /// </summary>
-            /// <param name="size">The size of the buffer</param>
-            void SetReceiveSize(int size);
-            /// <summary>
-            /// Set the line terminator character for the readLine function
-            /// </summary>
-            /// <param name="newLine"></param>
-            void SetReceiveNewLine(string newLine);
-            /// <summary>
             /// Read butes from the stream asnyc
             /// </summary>
             /// <param name="maxSize">The size of the buffer to read from the stream</param>
@@ -302,16 +308,6 @@ namespace NetLib
             /// </summary>
             /// <param name="data">The line to write to the stream</param>
             void WriteLine(string data);
-            /// <summary>
-            /// Set the encoding to encode string into bytes when sending a new line
-            /// </summary>
-            /// <param name="encoding">The encoding to encode strings with</param>
-            void SetSendEncoding(Encoding encoding);
-            /// <summary>
-            /// Set the line terminator to send whne sending a new line
-            /// </summary>
-            /// <param name="newLine">The line terminator character to send</param>
-            void SetSendNewLine(string newLine);
         }
 
         /// <summary>
@@ -346,16 +342,6 @@ namespace NetLib
             /// <param name="data">The line to write to the stream</param>
             /// <param name="clientid">The ID of the client to send the new line to</param>
             void WriteLine(string data, string clientid);
-            /// <summary>
-            /// Set the encoding to encode string into bytes when sending a new line
-            /// </summary>
-            /// <param name="encoding">The encoding to encode strings with</param>
-            void SetSendEncoding(Encoding encoding);
-            /// <summary>
-            /// Set the line terminator to send whne sending a new line
-            /// </summary>
-            /// <param name="newLine">The line terminator character to send</param>
-            void SetSendNewLine(string newLine);
         }
 
         /// <summary>
@@ -388,21 +374,6 @@ namespace NetLib
             /// <param name="callback">The function to call when lines are received</param>
             /// <param name="clientid">The ID of the client to add the event to</param>
             void AddEventLineReceived(Action<string> callback, string clientid);
-            /// <summary>
-            /// Set the encoding used to decode bytes back to string
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            void SetReceiveEncoding(Encoding encoding);
-            /// <summary>
-            /// Set the size of the buffer to read from the stream
-            /// </summary>
-            /// <param name="size">The size of the buffer</param>
-            void SetReceiveSize(int size);
-            /// <summary>
-            /// Set the line terminator character for the readLine function
-            /// </summary>
-            /// <param name="newLine"></param>
-            void SetReceiveNewLine(string newLine);
             /// <summary>
             /// Read butes from the stream asnyc
             /// </summary>
@@ -571,6 +542,511 @@ namespace NetLib
                 isPaused = false;
             }
         }
+
+        /// <summary>
+        /// Ensures string message integrity using byte type message (client-server has to install the same augmentation)
+        /// </summary>
+        public class ByteIntegrity : Augmentation
+        {
+            /// <summary>
+            /// Event listener for when a new message is available
+            /// </summary>
+            public event Action<string> OnDataRead;
+            /// <summary>
+            /// Event listener for when a new message on a multi socket server is available
+            /// </summary>
+            public event Action<string, string> OnDataMultiRead;
+            /// <summary>
+            /// The separator used for splitting message content and header
+            /// </summary>
+            private const string separator = "?!%!?";
+            /// <summary>
+            /// Writer object for clients and single socket servers
+            /// </summary>
+            private INetworkWriter write;
+            /// <summary>
+            /// Reader object for clients and single socket servers
+            /// </summary>
+            private INetworkReader read;
+            /// <summary>
+            /// Writer object for multi socket servers
+            /// </summary>
+            private INetworkMultiWriter mWrite;
+            /// <summary>
+            /// Reader object for multi socket servers
+            /// </summary>
+            private INetworkMultiReader mRead;
+
+            /// <summary>
+            /// Init the integrity keeper
+            /// </summary>
+            public ByteIntegrity()
+            {
+                disableConsole = true; // Disable default messges
+            }
+
+            /// <summary>
+            /// Give an integer 0 prefix
+            /// </summary>
+            /// <param name="number">The number to give the prefix for</param>
+            /// <param name="prefix">The length of the total prefixed string</param>
+            /// <returns>The formatted int as a string</returns>
+            private string FormatInt(int number, int prefix)
+            {
+                string n = number.ToString(); // Convert the number to string
+                string result = ""; // Define the result
+                for (int i = 0; i < prefix - n.Length; i++) // Loop through the remaining 0s
+                {
+                    result += "0"; // Append the 0 to the front of the result
+                }
+
+                return result + n; // Return the full result
+            }
+
+            /// <summary>
+            /// Format a message for sending through the protocol
+            /// </summary>
+            /// <param name="message">The message to format</param>
+            /// <returns>The formatted message</returns>
+            private string FormatMessage(string message)
+            {
+                return $"{FormatInt(message.Length, 10)}{separator}{message}"; // Return the formatted message
+            }
+
+            /// <summary>
+            /// Event listener for when the augmentation is installed
+            /// </summary>
+            /// <param name="socket">The installling socket object</param>
+            public override void OnInstalled(INetworkSocket socket)
+            {
+                if (socket as INetworkMultiServer != null) // Multi socket server
+                {
+                    // Set the read and write object
+                    mWrite = socket as INetworkMultiWriter;
+                    mRead = socket as INetworkMultiReader;
+                }
+                else // Single socket server or client
+                {
+                    // Set the read and write object
+                    read = socket as INetworkReader;
+                    write = socket as INetworkWriter;
+                }
+            }
+
+            /// <summary>
+            /// Send data from a client or single socket server
+            /// </summary>
+            /// <param name="message">The message to send</param>
+            public void SendData(string message)
+            {
+                message = FormatMessage(message); // Format the message
+                Encoding e = ((INetworkSocket)write).SendEncoder; // Get the send encoding of the socket
+                byte[] data = e.GetBytes(message); // Get the bytes of the message
+                write.DirectWrite(data, 0, data.Length); // Send the bytes
+            }
+
+            /// <summary>
+            /// Send data from a multi socket server
+            /// </summary>
+            /// <param name="clientID">The id of the client to send the message to</param>
+            /// <param name="message">The message to send</param>
+            public void SendData(string clientID, string message)
+            {
+                message = FormatMessage(message); // Format the message
+                Encoding e = ((INetworkSocket)mWrite).SendEncoder; // Get the encoding to send bytes
+                byte[] data = e.GetBytes(message); // Get the bytes of the message
+                mWrite.DirectWrite(data, 0, data.Length, clientID); // Write the bytes to the socket
+            }
+
+            /// <summary>
+            /// Parse the blob of data into a message
+            /// </summary>
+            /// <returns>A parsed string message</returns>
+            private string ParseMessage(ref string fullString, ref int realLength)
+            {
+                if (realLength == 0) // Check if the length of current message isn't set
+                {
+                    if (fullString.Contains(separator)) // Check if the blob contains the separator
+                    {
+                        string length = fullString.Split(new string[] { separator }, StringSplitOptions.None)[0]; // Get the length of the real message
+                        if (!int.TryParse(length, out realLength)) throw new InvalidOperationException("The current message length invalid characters!"); // Try to parse the length to int
+                    }
+                }
+
+                if (fullString.Length >= realLength && realLength != 0 && fullString.Length != 0) // Check if the message is in the blob
+                {
+                    string realMessage = fullString.Substring(15, realLength); // Extract the messsage from the blob
+                    fullString = fullString.Substring(realLength + 15); // Extract the block from the blob
+                    realLength = 0; // Reset the current message length
+                    return realMessage; // Return the real messsage
+                }
+                else return null; // Return null result
+            }
+
+            /// <summary>
+            /// Begin reading data from the socket
+            /// </summary>
+            public void BeginReadData()
+            {
+                Encoding e = ((INetworkSocket)read).RecvEncoder; // Get the read encoding
+                string fullString = ""; // The blob of the received messages from the client
+                int realLength = 0; // The length of the current message to parse
+
+                read.AddEventDataReceived((data) => // Check for new data
+                {
+                    string msg = e.GetString(data); // Get the string message
+                    fullString += msg; // Append it to the blob
+                    for (int i = 0; i < 10; i++) // Spin 10 times, for larger network loads to clear
+                    {
+                        string result = ParseMessage(ref fullString, ref realLength); // Try to get the next message
+                        if (result != null) OnDataRead?.Invoke(result); // Signal the message
+                        else break; // No more full messages
+                    }
+                });
+            }
+
+            /// <summary>
+            /// Begin reading data from a multi socket server
+            /// </summary>
+            /// <param name="clientID">The ID of the client to send the message to</param>
+            public void BeginReadData(string clientID)
+            {
+                Encoding e = ((INetworkSocket)mRead).RecvEncoder; // Get the read encoding
+                string fullString = ""; // The blob of the receive message from the client
+                int realLength = 0; // The length of the current message to parse
+                mRead.AddEventDataReceived((data) => // Check for new data
+                {
+                    string msg = e.GetString(data); // Get the string message
+                    fullString += msg; // Append it to the blob
+                    for (int i = 0; i < 10; i++) // Spin 10 times, for larger network loads to clear
+                    {
+                        string result = ParseMessage(ref fullString, ref realLength); // Try to get the next message
+                        if (result != null) OnDataMultiRead?.Invoke(result, clientID); // Signal the message
+                        else break; // No more full messages
+                    }
+                }, clientID);
+            }
+        }
+
+        /// <summary>
+        /// Basic chat server augmentation
+        /// </summary>
+        public class Chat : Augmentation
+        {
+            /// <summary>
+            /// Message receive event arguments
+            /// </summary>
+            public class MessageReceivedEventArgs
+            {
+                /// <summary>
+                /// Create a new event argument object
+                /// </summary>
+                /// <param name="msg">The message the client sent</param>
+                /// <param name="user">The name of the user who sent the message</param>
+                public MessageReceivedEventArgs(string msg, string user)
+                {
+                    Message = msg; // Set the message
+                    Username = user; // Set the username
+                }
+
+                /// <summary>
+                /// The message the user sent
+                /// </summary>
+                public string Message { get; private set; }
+                /// <summary>
+                /// The name of the user who sent the message
+                /// </summary>
+                public string Username { get; private set; }
+            }
+
+            /// <summary>
+            /// Instance of the server
+            /// </summary>
+            private INetworkMultiServer chatServer;
+            /// <summary>
+            /// Instance of the client
+            /// </summary>
+            private INetworkSocket chatClient;
+            /// <summary>
+            /// The name of the client user
+            /// </summary>
+            private string userName;
+            /// <summary>
+            /// ByteIntegrity object of the client
+            /// </summary>
+            private ByteIntegrity clientBI = null;
+            /// <summary>
+            /// A list of users connected to the server
+            /// </summary>
+            private List<Tuple<string, string>> users = new List<Tuple<string, string>>();
+            /// <summary>
+            /// Event listener for when failed to send a direct message
+            /// </summary>
+            public event Action<string> DirectMessageFailed;
+            /// <summary>
+            /// Event listener for when failed to broadcast a message
+            /// </summary>
+            public event Action<string> BroadcastFailed;
+            /// <summary>
+            /// Event listener for when the selected username is already taken
+            /// </summary>
+            public event Action<string> UsernameSelectionFailed;
+            /// <summary>
+            /// Event listener for when a new message is received
+            /// </summary>
+            public event Action<MessageReceivedEventArgs> MessageReceived;
+            /// <summary>
+            /// The separator string to use with message headers
+            /// </summary>
+            private const string messageHeaderSeparator = ":a!a:";
+
+            /// <summary>
+            /// Init the chat augmentation
+            /// <param name="username">The name of the user to use for chatting (ignore if installing on server)</param>
+            /// </summary>
+            public Chat(string username = null)
+            {
+                disableConsole = true; // Disable default messages
+                userName = username; // Set the username
+            }
+
+            /// <summary>
+            /// Augmentation installed on the socket
+            /// </summary>
+            /// <param name="socket"></param>
+            public override void OnInstalled(INetworkSocket socket)
+            {
+                if (socket as INetworkMultiServer != null) // Chat Server binding
+                {
+                    chatServer = (INetworkMultiServer)socket; // Set the server socket
+                    ServerSetup(); // Setup the server with chat functions
+                }
+                else if (socket as INetworkServer != null) // Invalid binding (single socket server)
+                {
+#if Validation_hard
+                    throw new InvalidOperationException("Can't augment chat to a single socket server. Use MultiTcpServer or MultiSSLServer instead");
+#else
+                    return;
+#endif
+                }
+                else // Chat Client binding
+                {
+                    chatClient = socket; // Set the client socket
+                    ClientSetup(); // Setup the client with the chat functions
+                }
+            }
+
+            /// <summary>
+            /// Check if the specified client has a username
+            /// </summary>
+            /// <param name="clientID">The ID of the client to check</param>
+            /// <returns>True if the client has a username otherwise false</returns>
+            private bool IsUsernameSet(string clientID)
+            {
+                Tuple<string, string> result = users.Find((user) => clientID == user.Item1); // Search for the client
+                return result != null; // Return the result
+            }
+
+            private string GetUsername(string clientID)
+            {
+                Tuple<string, string> result = users.Find((user) => clientID == user.Item1); // Search for the client
+                if (result == null) return null; // Check if the resul's null
+                return result.Item2; // Return the name of the client
+            }
+
+            /// <summary>
+            /// Check if a user already exists with the specified username
+            /// </summary>
+            /// <param name="username">The username to check</param>
+            /// <returns>True if the username isn't available, otherwise false</returns>
+            private bool UsernameTaken(string username)
+            {
+                foreach (Tuple<string, string> clientData in users) // Loop through the registered users
+                {
+                    if (clientData.Item2 == username) return true; // Return true if the username's found
+                }
+
+                return false; // Return false, if the username isn't found
+            }
+
+            /// <summary>
+            /// Send a message to a specified username
+            /// </summary>
+            /// <param name="user">The user to send the message to</param>
+            /// <param name="message">The message to send</param>
+            /// <param name="server">The server instance to send the messge with</param>
+            /// <param name="sender">The sender of the message</param>
+            /// <returns>True if message sent, otherwise false</returns>
+            private bool SendTo(string user, string message, ByteIntegrity server, string sender)
+            {
+                Tuple<string, string> result = users.Find((u) => user == u.Item2); // Find the target user
+                if (result == null) return false; // Return false if user not found
+                string id = result.Item1; // Get the clientID of the user
+                server.SendData(id, $"{sender}{messageHeaderSeparator}{message}"); // Send the message to the user
+                return true; // Return true, successful message sending
+            }
+
+            /// <summary>
+            /// Broadcast a message to everyone
+            /// </summary>
+            /// <param name="sender">The sender of the message</param>
+            /// <param name="message">The message</param>
+            /// <param name="server">The server instance to send the messag with</param>
+            private void Broadcast(string sender, string message, ByteIntegrity server)
+            {
+                List<Tuple<string, string>> toRemove = new List<Tuple<string, string>>(); // Define a list of client to remove
+
+                foreach (Tuple<string, string> clientData in users) // Loop through the users
+                {
+                    if (clientData.Item2 == sender) continue; // Don't send the message if the user is the sender
+                    try
+                    {
+                        server.SendData(clientData.Item1, $"{sender}{messageHeaderSeparator}{message}"); // Send the message to the current user
+                    }
+                    catch (InvalidOperationException ex) // Current user disconnected
+                    {
+#if Logging_verbose // Do the logging
+                        Console.WriteLine("Supressed client error");
+                        Console.WriteLine(ex);
+#endif
+                        toRemove.Add(clientData); // Add disconnected client to the list of clients to remove
+                    }
+                }
+
+                toRemove.ForEach((item) => users.Remove(item)); // Remove the disconnected clients from the list
+            }
+
+            /// <summary>
+            /// Setup the server for chat functions
+            /// </summary>
+            private void ServerSetup()
+            {
+                IAugmentable augmentable = chatServer as IAugmentable; // Get the augmentation handler of the server
+                ByteIntegrity bi = new ByteIntegrity(); // Create the integrity augmentation
+                augmentable.InstallAugmentation(bi); // Install the augmentation
+                chatServer.AddEventClientConnected((id) => // Event: new client connected
+                {
+                    bi.OnDataMultiRead += (message, clientID) => // Event: client sent data
+                    {
+                        if (clientID != id) return; // If the client id's don't match -> return
+#if Logging_verbose
+                        Console.WriteLine($"[{clientID}]: {message}"); // Debugging message
+#endif
+                        if (message.StartsWith("user-info")) // Set the username
+                        {
+                            string name = message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]; // Get the username parameter from the message
+                            if (UsernameTaken(name)) // Check if the username if taken already
+                            {
+                                bi.SendData(clientID, $"userfailed{messageHeaderSeparator}{name}"); // Notify the client
+                                return; // Return
+                            }
+                            users.Add(new Tuple<string, string>(id, name)); // Add the user to the user list
+                        }
+                        else if (message.StartsWith($"dm{messageHeaderSeparator}")) // Send direct message
+                        {
+                            string[] data = message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None); // Get the parameter array
+                            string user = data[1]; // Get the target user
+                            string msg = data[2]; // Get the message
+                            if (!IsUsernameSet(id)) // Check if the client set a username
+                            {
+                                bi.SendData(clientID, $"dmfailed{messageHeaderSeparator}{user}{messageHeaderSeparator}{msg}"); // Send an error to the sender
+                            }
+                            else
+                            {
+                                string sender = GetUsername(id); // Get the username of the sender
+                                if (!SendTo(user, msg, bi, sender)) // Try to send the message to the target client
+                                {
+                                    bi.SendData(clientID, $"dmfailed{messageHeaderSeparator}{user}{messageHeaderSeparator}{msg}"); // Send the error message to the sender client
+                                }
+                            }
+                        }
+                        else // Broadcast message
+                        {
+                            if (!IsUsernameSet(id)) // Check if the client set a username
+                            {
+                                bi.SendData(clientID, $"broadcastfailed{messageHeaderSeparator}{message}"); // Send the error message to the client
+                            }
+                            else
+                            {
+                                string sender = GetUsername(id); // Get the username of the sender
+                                Broadcast(sender, message, bi); // Broadcast the message to every user
+                            }
+                        }
+                    };
+                    bi.BeginReadData(id); // Start reading from the client
+                });
+            }
+
+            /// <summary>
+            /// Set a new username if the current one's taken
+            /// </summary>
+            /// <param name="user">The new username to set</param>
+            public void ReloadUsername(string user)
+            {
+                userName = user; // Set the global username
+                clientBI.SendData($"user-info{messageHeaderSeparator}{user}"); // Set the username on the server
+            }
+
+            /// <summary>
+            /// Setup the client for chat functions
+            /// </summary>
+            private void ClientSetup()
+            {
+                IAugmentable augmentable = chatClient as IAugmentable; // Get the augmentation handler of the client
+                clientBI = new ByteIntegrity(); // Create a new byteintegrity augmentation
+                augmentable.InstallAugmentation(clientBI); // Install the augmentation to the client
+                if (userName == null) throw new InvalidOperationException("Can't start chatting without setting a username!"); // Check if the username is set
+                clientBI.SendData($"user-info{messageHeaderSeparator}{userName}"); // Set the username on the server
+                clientBI.OnDataRead += (message) => // Event: server sent data
+                {
+                    const string dmFailed = "dmfailed" + messageHeaderSeparator; // Direct messgae failed header
+                    const string broadcastFailed = "broadcastfailed" + messageHeaderSeparator; // Broadcast failed header
+                    const string usernameFailed = "userfailed" + messageHeaderSeparator; // Username set failed header
+                    if (message.StartsWith(dmFailed)) // Check if a direct message failed
+                    {
+                        DirectMessageFailed?.Invoke(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]); // Fire the event
+                    }
+                    else if (message.StartsWith(broadcastFailed)) // Check if a broadcast failed
+                    {
+                        BroadcastFailed?.Invoke(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]); // Fire the event
+                    }
+                    else if (message.StartsWith(usernameFailed)) // Check if the failed to set the username
+                    {
+                        UsernameSelectionFailed?.Invoke(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]); // Fire the event
+                    }
+                    else // Successful
+                    {
+                        string[] msgData = message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None); // Get the contents of the message
+                        string userName = msgData[0]; // Get the username
+                        string msg = msgData[1]; // Get the message
+                        MessageReceivedEventArgs e = new MessageReceivedEventArgs(msg, userName); // Create the event data
+                        MessageReceived?.Invoke(e); // Invoke the event
+                    }
+                };
+                clientBI.BeginReadData(); // Begin reading from the client
+            }
+
+            /// <summary>
+            /// Send a message to everyone
+            /// </summary>
+            /// <param name="message">The message to send</param>
+            public void SendMessage(string message)
+            {
+                if (clientBI == null) throw new InvalidOperationException("Only chat clients can send message, the server is only a forwarder for client messages"); // Check if we're a chat client
+                clientBI.SendData(message); // Broadcast the message
+            }
+
+            /// <summary>
+            /// Send a Direct Message to a user
+            /// </summary>
+            /// <param name="username">The user to send the message to</param>
+            /// <param name="message">The message to send</param>
+            public void SendMessage(string username, string message)
+            {
+                if (clientBI == null) throw new InvalidOperationException("Only chat clients can send message, the server is only a forwarder for client messages"); // Check if we're a chat client
+                clientBI.SendData($"dm{messageHeaderSeparator}{username}{messageHeaderSeparator}{message}"); // Broadcast the message
+            }
+        }
     }
 
     namespace Servers
@@ -595,23 +1071,23 @@ namespace NetLib
             /// <summary>
             /// The size of the buffer to receive from the client
             /// </summary>
-            protected int recvSize;
+            public int RecvSize { get; set; }
             /// <summary>
             /// The encoding used when receiving new lines
             /// </summary>
-            protected Encoding recvEncoder;
+            public Encoding RecvEncoder { get; set; }
             /// <summary>
             /// The encoding use when sending new lines
             /// </summary>
-            protected Encoding sendEncoder;
+            public Encoding SendEncoder { get; set; }
             /// <summary>
             /// The new line terminator to read until
             /// </summary>
-            protected string readNewLine;
+            public string ReadNewLine { get; set; }
             /// <summary>
             /// The new line terminator to send
             /// </summary>
-            protected string writeNewLine;
+            public string WriteNewLine { get; set; }
             /// <summary>
             /// Indicates if the server's running
             /// </summary>
@@ -637,15 +1113,6 @@ namespace NetLib
             /// Init the server
             /// </summary>
             /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
-            public SingleTcpServer(bool restartRead)
-            {
-                ServerInit(restartRead); // Init the server
-            }
-
-            /// <summary>
-            /// Init the server
-            /// </summary>
-            /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
             /// <param name="ep">The endpoint to run the server on</param>
             public SingleTcpServer(bool restartRead, IPEndPoint ep)
             {
@@ -662,7 +1129,11 @@ namespace NetLib
                 client = null; // Set the current client to null
                 serverEndPoint = null; // Reset the current endpoint
                 serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new server socket
-                recvSize = 1024; // Init the read buffer size
+                RecvSize = 1024; // Init the read buffer size
+                ReadNewLine = "\n"; // Init the read new line terminator
+                WriteNewLine = "\n"; // Init the write new line terminator
+                SendEncoder = Encoding.ASCII; // Init the send string encoding
+                RecvEncoder = Encoding.ASCII; // Init the read string encoding
                 restartReading = restartRead; // Set the restart read variable
             }
 
@@ -679,11 +1150,11 @@ namespace NetLib
                     client = new Clients.TcpClient(clientSocket); // Wrap the clinet in the NetLib tcp client class
                     augmentations.ForEach((aug) => client.InstallAugmentation(aug));
                     // Set client data
-                    client.SetReceiveEncoding(recvEncoder);
-                    client.SetReceiveNewLine(readNewLine);
-                    client.SetReceiveSize(recvSize);
-                    client.SetSendEncoding(sendEncoder);
-                    client.SetSendNewLine(writeNewLine);
+                    client.RecvEncoder = RecvEncoder;
+                    client.ReadNewLine = ReadNewLine;
+                    client.RecvSize = RecvSize;
+                    client.SendEncoder = SendEncoder;
+                    client.WriteNewLine = WriteNewLine;
                     client.AddEventClientStopped(() => { if (restartReading) Start(); });
                     client.AddEventClientStopped(() => ClientDisconnected?.Invoke());
                     ClientConnected?.Invoke();
@@ -819,33 +1290,6 @@ namespace NetLib
             }
 
             /// <summary>
-            /// Set the read encoding
-            /// </summary>
-            /// <param name="encoding">The encoding to decode bytes arrays with</param>
-            public void SetReceiveEncoding(Encoding encoding)
-            {
-                recvEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the maximum number of bytes to receive
-            /// </summary>
-            /// <param name="size">The number of bytes</param>
-            public void SetReceiveSize(int size)
-            {
-                recvSize = size; // Set the size
-            }
-
-            /// <summary>
-            /// Set the read line terminator
-            /// </summary>
-            /// <param name="newLine">The line terminator character</param>
-            public void SetReceiveNewLine(string newLine)
-            {
-                readNewLine = newLine; // Set the line terminator
-            }
-
-            /// <summary>
             /// Directly write bytes to the stream
             /// </summary>
             /// <param name="buffer">The array of bytes to write to the stream</param>
@@ -882,26 +1326,8 @@ namespace NetLib
             /// <param name="data">The line to write to the stream</param>
             public void WriteLine(string data)
             {
-                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
+                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
                 DirectWrite(buffer); // Write the bytes to the stream
-            }
-
-            /// <summary>
-            /// Set the encoding for writing new lines to the stream
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            public void SetSendEncoding(Encoding encoding)
-            {
-                sendEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the new line terminator used when sending new lines
-            /// </summary>
-            /// <param name="newLine">The new line terminator to use</param>
-            public void SetSendNewLine(string newLine)
-            {
-                writeNewLine = newLine;
             }
 
             /// <summary>
@@ -929,7 +1355,7 @@ namespace NetLib
             public void InstallAugmentation(Augmentation augmentation)
             {
                 augmentations.Add(augmentation); // Add the augmentation to the list
-                augmentation.OnInstalled(); // Notify the augmentation of the installation
+                augmentation.OnInstalled(this); // Notify the augmentation of the installation
                 if (client != null) client.InstallAugmentation(augmentation); // Proxy to the client
             }
 
@@ -969,23 +1395,23 @@ namespace NetLib
             /// <summary>
             /// The number of maximum bytes to read from the stream
             /// </summary>
-            protected int recvSize;
+            public int RecvSize { get; set; }
             /// <summary>
             /// The encoding to use when reading new lines from the stream
             /// </summary>
-            protected Encoding recvEncoder;
+            public Encoding RecvEncoder { get; set; }
             /// <summary>
             /// The encoding to use when sending new lines to the stream
             /// </summary>
-            protected Encoding sendEncoder;
+            public Encoding SendEncoder { get; set; }
             /// <summary>
             /// The new line terminator used when reading new lines from the stream
             /// </summary>
-            protected string readNewLine;
+            public string ReadNewLine { get; set; }
             /// <summary>
             /// The new line terminator used when writing new lines to the stream
             /// </summary>
-            protected string writeNewLine;
+            public string WriteNewLine { get; set; }
             /// <summary>
             /// Indicated if the server's running
             /// </summary>
@@ -1010,16 +1436,6 @@ namespace NetLib
             /// A list to keep installed augmentations in
             /// </summary>
             protected List<Augmentation> augmentations = new List<Augmentation>();
-
-            /// <summary>
-            /// Init the server
-            /// </summary>
-            /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
-            /// <param name="sslParameters">SSL Socket Server Parameters</param>
-            public SingleSSLServer(bool restartRead, Utils.SSL.ServerSSLData sslParameters)
-            {
-                ServerInit(restartRead, sslParameters); // Init the server
-            }
 
             /// <summary>
             /// Init the server
@@ -1050,18 +1466,6 @@ namespace NetLib
             /// Init the server
             /// </summary>
             /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
-            /// <param name="certFilePath">The certification file to load into ssl sockets</param>
-            /// <param name="serverAddress">The address of this server (domain name specified in the cert file)</param>
-            /// <param name="protocols">The SSL Protocol to use during the handshake</param>
-            public SingleSSLServer(bool restartRead, string certFilePath, string serverAddress, System.Security.Authentication.SslProtocols protocols)
-            {
-                ServerInit(restartRead, Utils.SSL.ParseServerData(certFilePath, serverAddress, protocols));
-            }
-
-            /// <summary>
-            /// Init the server
-            /// </summary>
-            /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
             /// <param name="ep">The endpoint to run the server on</param>
             /// <param name="certFilePath">The certification file to load into ssl sockets</param>
             /// <param name="serverAddress">The address of this server (domain name specified in the cert file)</param>
@@ -1075,24 +1479,17 @@ namespace NetLib
             /// Init the server
             /// </summary>
             /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
-            /// <param name="certFilePath">The certification file to load into ssl sockets</param>
-            /// <param name="serverAddress">The address of this server (domain name specified in the cert file)</param>
-            public SingleSSLServer(bool restartRead, string certFilePath, string serverAddress)
-            {
-                ServerInit(restartRead, Utils.SSL.ParseServerData(certFilePath, serverAddress, Utils.SSL.defaultProtocols));
-            }
-
-            /// <summary>
-            /// Init the server
-            /// </summary>
-            /// <param name="restartRead">True to restart reading after the current client closes, otherwise false</param>
             /// <param name="sslParameters">SSL Socket Server Parameters</param>
             private void ServerInit(bool restartRead, Utils.SSL.ServerSSLData sslParameters)
             {
                 client = null; // Reset the client
                 serverEndPoint = null; // Reset the endpoint
                 serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new server socket
-                recvSize = 1024; // Set the default maximum number of bytes to read
+                RecvSize = 1024; // Set the default maximum number of bytes to read
+                ReadNewLine = "\n"; // Init the read new line terminator
+                WriteNewLine = "\n"; // Init the write new line terminator
+                SendEncoder = Encoding.ASCII; // Init the send string encoding
+                RecvEncoder = Encoding.ASCII; // Init the read string encoding
                 restartReading = restartRead; // Set the restart flag
                 sslParams = sslParameters; // Set the ssl connection parameters
             }
@@ -1115,11 +1512,11 @@ namespace NetLib
                         client = new Clients.SSLClient(clientStream); // Wrap the client in the SSL Client class
                         augmentations.ForEach((aug) => client.InstallAugmentation(aug)); // Install existing augmentations to the new client
                         // Setup the client
-                        client.SetReceiveEncoding(recvEncoder);
-                        client.SetReceiveNewLine(readNewLine);
-                        client.SetReceiveSize(recvSize);
-                        client.SetSendEncoding(sendEncoder);
-                        client.SetSendNewLine(writeNewLine);
+                        client.RecvEncoder = RecvEncoder;
+                        client.ReadNewLine = ReadNewLine;
+                        client.RecvSize = RecvSize;
+                        client.SendEncoder = SendEncoder;
+                        client.WriteNewLine = WriteNewLine;
                         client.AddEventClientStopped(() => { if (restartReading) Start(); });
                         client.AddEventClientStopped(() => ClientDisconnected?.Invoke());
                         ClientConnected?.Invoke(); // Notify the executing assembly of the connection
@@ -1277,33 +1674,6 @@ namespace NetLib
             }
 
             /// <summary>
-            /// Set the encoding to read new lines with
-            /// </summary>
-            /// <param name="encoding">The encoding to read new lines with</param>
-            public void SetReceiveEncoding(Encoding encoding)
-            {
-                recvEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the maximum number of bytes to read from the stream
-            /// </summary>
-            /// <param name="size">The number of maximum bytes to read from the stream</param>
-            public void SetReceiveSize(int size)
-            {
-                recvSize = size; // Set the size
-            }
-
-            /// <summary>
-            /// Set the read new line terminator
-            /// </summary>
-            /// <param name="newLine">The line terminator</param>
-            public void SetReceiveNewLine(string newLine)
-            {
-                readNewLine = newLine; // Set the line terminator
-            }
-
-            /// <summary>
             /// Directly write bytes to the stream
             /// </summary>
             /// <param name="buffer">The array of bytes to write</param>
@@ -1340,26 +1710,8 @@ namespace NetLib
             /// <param name="data">The new line to write</param>
             public void WriteLine(string data)
             {
-                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the line terminator to a byte array
+                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the line terminator to a byte array
                 DirectWrite(buffer); // Send bytes to the stream
-            }
-
-            /// <summary>
-            /// Set the encoding for sending new lines
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            public void SetSendEncoding(Encoding encoding)
-            {
-                sendEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the new line terminator for sending new lines
-            /// </summary>
-            /// <param name="newLine">The new line terminator character</param>
-            public void SetSendNewLine(string newLine)
-            {
-                writeNewLine = newLine; // Set the line terminator
             }
 
             /// <summary>
@@ -1378,7 +1730,7 @@ namespace NetLib
             public void InstallAugmentation(Augmentation augmentation)
             {
                 augmentations.Add(augmentation); // Add the augmentation to the list
-                augmentation.OnInstalled(); // Notify the augmentation of the installation
+                augmentation.OnInstalled(this); // Notify the augmentation of the installation
                 if (client != null) client.InstallAugmentation(augmentation); // Proxy to the client
             }
 
@@ -1414,23 +1766,23 @@ namespace NetLib
             /// <summary>
             /// The size of the buffer to receive from the client
             /// </summary>
-            protected int recvSize;
+            public int RecvSize { get; set; }
             /// <summary>
             /// The encoding used when receiving new lines
             /// </summary>
-            protected Encoding recvEncoder;
+            public Encoding RecvEncoder { get; set; }
             /// <summary>
             /// The encoding use when sending new lines
             /// </summary>
-            protected Encoding sendEncoder;
+            public Encoding SendEncoder { get; set; }
             /// <summary>
             /// The new line terminator to read until
             /// </summary>
-            protected string readNewLine;
+            public string ReadNewLine { get; set; }
             /// <summary>
             /// The new line terminator to send
             /// </summary>
-            protected string writeNewLine;
+            public string WriteNewLine { get; set; }
             /// <summary>
             /// Indicates if the server's running
             /// </summary>
@@ -1466,7 +1818,11 @@ namespace NetLib
                 clients.Clear(); // Clear the current client list
                 serverEndPoint = null; // Reset the current endpoint
                 serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new server socket
-                recvSize = 2048; // Init the read buffer size
+                RecvSize = 2048; // Init the read buffer size
+                ReadNewLine = "\n"; // Init the read new line terminator
+                WriteNewLine = "\n"; // Init the write new line terminator
+                SendEncoder = Encoding.ASCII; // Init the send string encoding
+                RecvEncoder = Encoding.ASCII; // Init the read string encoding
             }
 
             /// <summary>
@@ -1502,11 +1858,11 @@ namespace NetLib
                         augmentations.ForEach((aug) => client.InstallAugmentation(aug)); // Install the current augmentation to the new client
                         string clientID = Utils.NetworkIO.GenerateID(); // Generate the runtime unique ID of the client
                         // Set client data
-                        client.SetReceiveEncoding(recvEncoder);
-                        client.SetReceiveNewLine(readNewLine);
-                        client.SetReceiveSize(recvSize);
-                        client.SetSendEncoding(sendEncoder);
-                        client.SetSendNewLine(writeNewLine);
+                        client.RecvEncoder = RecvEncoder;
+                        client.ReadNewLine = ReadNewLine;
+                        client.RecvSize = RecvSize;
+                        client.SendEncoder = SendEncoder;
+                        client.WriteNewLine = WriteNewLine;
                         // Construct the clientData
                         Tuple<string, Clients.TcpClient> clientData = new Tuple<string, Clients.TcpClient>(clientID, client);
                         // Add the client to the list
@@ -1702,33 +2058,6 @@ namespace NetLib
             }
 
             /// <summary>
-            /// Set the read encoding
-            /// </summary>
-            /// <param name="encoding">The encoding to decode bytes arrays with</param>
-            public void SetReceiveEncoding(Encoding encoding)
-            {
-                recvEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the maximum number of bytes to receive
-            /// </summary>
-            /// <param name="size">The number of bytes</param>
-            public void SetReceiveSize(int size)
-            {
-                recvSize = size; // Set the size
-            }
-
-            /// <summary>
-            /// Set the read line terminator
-            /// </summary>
-            /// <param name="newLine">The line terminator character</param>
-            public void SetReceiveNewLine(string newLine)
-            {
-                readNewLine = newLine; // Set the line terminator
-            }
-
-            /// <summary>
             /// Directly write bytes to the stream
             /// </summary>
             /// <param name="buffer">The array of bytes to write to the stream</param>
@@ -1772,26 +2101,8 @@ namespace NetLib
             {
                 Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) return; // Check if the client is null
-                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
+                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
                 DirectWrite(buffer, clientID); // Write the bytes to the stream
-            }
-
-            /// <summary>
-            /// Set the encoding for writing new lines to the stream
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            public void SetSendEncoding(Encoding encoding)
-            {
-                sendEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the new line terminator used when sending new lines
-            /// </summary>
-            /// <param name="newLine">The new line terminator to use</param>
-            public void SetSendNewLine(string newLine)
-            {
-                writeNewLine = newLine; // Set the line terminator for sending
             }
 
             /// <summary>
@@ -1810,8 +2121,8 @@ namespace NetLib
             public void InstallAugmentation(Augmentation augmentation)
             {
                 augmentations.Add(augmentation); // Add the augmentation to the list
-                augmentation.OnInstalled(); // Notify the augmentation of the installation
-                
+                augmentation.OnInstalled(this); // Notify the augmentation of the installation
+
                 foreach (Tuple<string, Clients.TcpClient> clientData in clients) // Go through the connected clients
                 {
                     clientData.Item2.InstallAugmentation(augmentation); // Install the augmentation to the current client
@@ -1854,23 +2165,23 @@ namespace NetLib
             /// <summary>
             /// The size of the buffer to receive from the client
             /// </summary>
-            protected int recvSize;
+            public int RecvSize { get; set; }
             /// <summary>
             /// The encoding used when receiving new lines
             /// </summary>
-            protected Encoding recvEncoder;
+            public Encoding RecvEncoder { get; set; }
             /// <summary>
             /// The encoding use when sending new lines
             /// </summary>
-            protected Encoding sendEncoder;
+            public Encoding SendEncoder { get; set; }
             /// <summary>
             /// The new line terminator to read until
             /// </summary>
-            protected string readNewLine;
+            public string ReadNewLine { get; set; }
             /// <summary>
             /// The new line terminator to send
             /// </summary>
-            protected string writeNewLine;
+            public string WriteNewLine { get; set; }
             /// <summary>
             /// Indicates if the server's running
             /// </summary>
@@ -1935,8 +2246,12 @@ namespace NetLib
                 clients.Clear(); // Clear the current client list
                 serverEndPoint = null; // Reset the current endpoint
                 serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new server socket
-                recvSize = 2048; // Init the read buffer size
+                RecvSize = 2048; // Init the read buffer size
                 sslParams = sslParameters; // Set the ssl protocol parameters
+                ReadNewLine = "\n"; // Init the read new line terminator
+                WriteNewLine = "\n"; // Init the write new line terminator
+                SendEncoder = Encoding.ASCII; // Init the send string encoding
+                RecvEncoder = Encoding.ASCII; // Init the read string encoding
             }
 
             /// <summary>
@@ -1975,11 +2290,11 @@ namespace NetLib
                         augmentations.ForEach((aug) => client.InstallAugmentation(aug)); // Install the current augmentation to the new client
                         string clientID = Utils.NetworkIO.GenerateID(); // Generate the runtime unique ID of the client
                         // Set client data
-                        client.SetReceiveEncoding(recvEncoder);
-                        client.SetReceiveNewLine(readNewLine);
-                        client.SetReceiveSize(recvSize);
-                        client.SetSendEncoding(sendEncoder);
-                        client.SetSendNewLine(writeNewLine);
+                        client.RecvEncoder = RecvEncoder;
+                        client.ReadNewLine = ReadNewLine;
+                        client.RecvSize = RecvSize;
+                        client.SendEncoder = SendEncoder;
+                        client.WriteNewLine = WriteNewLine;
                         // Construct the clientData
                         Tuple<string, Clients.SSLClient> clientData = new Tuple<string, Clients.SSLClient>(clientID, client);
                         // Add the client to the list
@@ -2175,33 +2490,6 @@ namespace NetLib
             }
 
             /// <summary>
-            /// Set the read encoding
-            /// </summary>
-            /// <param name="encoding">The encoding to decode bytes arrays with</param>
-            public void SetReceiveEncoding(Encoding encoding)
-            {
-                recvEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the maximum number of bytes to receive
-            /// </summary>
-            /// <param name="size">The number of bytes</param>
-            public void SetReceiveSize(int size)
-            {
-                recvSize = size; // Set the size
-            }
-
-            /// <summary>
-            /// Set the read line terminator
-            /// </summary>
-            /// <param name="newLine">The line terminator character</param>
-            public void SetReceiveNewLine(string newLine)
-            {
-                readNewLine = newLine; // Set the line terminator
-            }
-
-            /// <summary>
             /// Directly write bytes to the stream
             /// </summary>
             /// <param name="buffer">The array of bytes to write to the stream</param>
@@ -2245,26 +2533,8 @@ namespace NetLib
             {
                 Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) return; // Check if the client is null
-                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
+                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
                 DirectWrite(buffer, clientID); // Write the bytes to the stream
-            }
-
-            /// <summary>
-            /// Set the encoding for writing new lines to the stream
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            public void SetSendEncoding(Encoding encoding)
-            {
-                sendEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the new line terminator used when sending new lines
-            /// </summary>
-            /// <param name="newLine">The new line terminator to use</param>
-            public void SetSendNewLine(string newLine)
-            {
-                writeNewLine = newLine; // Set the line terminator for sending
             }
 
             /// <summary>
@@ -2283,7 +2553,7 @@ namespace NetLib
             public void InstallAugmentation(Augmentation augmentation)
             {
                 augmentations.Add(augmentation); // Add the augmentation to the list
-                augmentation.OnInstalled(); // Notify the augmentation of the installation
+                augmentation.OnInstalled(this); // Notify the augmentation of the installation
 
                 foreach (Tuple<string, Clients.SSLClient> clientData in clients) // Go through the connected clients
                 {
@@ -2326,23 +2596,23 @@ namespace NetLib
             /// <summary>
             /// Encoding for reading new lines
             /// </summary>
-            protected Encoding recvEncoder;
+            public Encoding RecvEncoder { get; set; }
             /// <summary>
             /// Encoding for sending new lines
             /// </summary>
-            protected Encoding sendEncoder;
+            public Encoding SendEncoder { get; set; }
             /// <summary>
             /// Maximum receive buffer size
             /// </summary>
-            protected int recvSize;
+            public int RecvSize { get; set; }
             /// <summary>
             /// New line terminator for reading new lines
             /// </summary>
-            protected string readNewLine;
+            public string ReadNewLine { get; set; }
             /// <summary>
             /// New line terminator for sending new lines
             /// </summary>
-            protected string writeNewLine;
+            public string WriteNewLine { get; set; }
             /// <summary>
             /// Event for receiving byte data
             /// </summary>
@@ -2373,11 +2643,11 @@ namespace NetLib
             protected bool fromServer = false;
 
             /// <summary>
-            /// Init the client
+            /// Empty constructor for SSL clients (don't use this constructor)
             /// </summary>
             public TcpClient()
             {
-                ClientInit(); // Init the client
+                ClientInit(); // Init the tcp client
             }
 
             /// <summary>
@@ -2387,11 +2657,11 @@ namespace NetLib
             {
                 clientEndPoint = null; // Reset the endpoint
                 client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new client socket
-                recvEncoder = Encoding.UTF8; // Set the receive encoder
-                sendEncoder = Encoding.UTF8; // Set the send encoder
-                recvSize = 1024; // Set the receive buffer size
-                readNewLine = Environment.NewLine; // Set the reading line terminator
-                writeNewLine = Environment.NewLine; // Set the sending line terminator
+                RecvSize = 1024; // Set the receive buffer size
+                ReadNewLine = "\n"; // Init the read new line terminator
+                WriteNewLine = "\n"; // Init the write new line terminator
+                SendEncoder = Encoding.ASCII; // Init the send string encoding
+                RecvEncoder = Encoding.ASCII; // Init the read string encoding
                 receiveCallbackMode = Utils.NetworkIO.ReadEventCodes.Stopped; // Set the receive event mode
             }
 
@@ -2482,45 +2752,18 @@ namespace NetLib
 
                 while (true) // Inifinite loop
                 {
-                    byte[] buffer = new byte[recvSize]; // Define receive buffer
-                    int bytesRead = client.Receive(buffer, 0, recvSize, SocketFlags.None); // Read bytes from the stream
-                    string subResult = recvEncoder.GetString(buffer, 0, bytesRead); // Decode bytes read into strings
+                    byte[] buffer = new byte[RecvSize]; // Define receive buffer
+                    int bytesRead = client.Receive(buffer, 0, RecvSize, SocketFlags.None); // Read bytes from the stream
+                    string subResult = RecvEncoder.GetString(buffer, 0, bytesRead); // Decode bytes read into strings
                     result.Append(subResult); // Append to the total result
-                    if (subResult.EndsWith(readNewLine)) break; // If the data ends with a new line, return it
+                    if (subResult.EndsWith(ReadNewLine)) break; // If the data ends with a new line, return it
                 }
                 string res = result.ToString();
 
-                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
-                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
 
                 return res; // Return the constructed line from the connection
-            }
-
-            /// <summary>
-            /// Set the encoding to read new lines
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            public void SetReceiveEncoding(Encoding encoding)
-            {
-                recvEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the size of the receive buffer
-            /// </summary>
-            /// <param name="size">The maximum size of the received bytes at once</param>
-            public void SetReceiveSize(int size)
-            {
-                recvSize = size; // Set the limit
-            }
-
-            /// <summary>
-            /// Set the new line terminator for reading new lines
-            /// </summary>
-            /// <param name="newLine">The new line terminator character</param>
-            public void SetReceiveNewLine(string newLine)
-            {
-                readNewLine = newLine; // Set the line terminator
             }
 
             /// <summary>
@@ -2558,11 +2801,11 @@ namespace NetLib
                     receiveCallbackMode = enableCode; // Set the code to the caller
                     Utils.NetworkIO.ClientReadObject readObject = new Utils.NetworkIO.ClientReadObject() // Define a new read object
                     {
-                        buffer = new byte[recvSize], // Byte buffer
+                        buffer = new byte[RecvSize], // Byte buffer
                         lineRecvResult = new StringBuilder() // String buffer
                     };
 
-                    client.BeginReceive(readObject.buffer, 0, recvSize, SocketFlags.None, new AsyncCallback(ReceiveCallback), readObject); // Begin reading the stream
+                    client.BeginReceive(readObject.buffer, 0, RecvSize, SocketFlags.None, new AsyncCallback(ReceiveCallback), readObject); // Begin reading the stream
                 }
                 else if (receiveCallbackMode != Utils.NetworkIO.ReadEventCodes.Both && receiveCallbackMode != enableCode) receiveCallbackMode = enableCode; // Enable the other callback too
             }
@@ -2622,24 +2865,24 @@ namespace NetLib
 
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
                     {
-                        string subResult = recvEncoder.GetString(dataBuffer, 0, bytesRead); // Decode the data
+                        string subResult = RecvEncoder.GetString(dataBuffer, 0, bytesRead); // Decode the data
                         readObject.lineRecvResult.Append(subResult); // Append the result to the string buffer
-                        if (subResult.EndsWith(readNewLine)) // Check for line ending
+                        if (subResult.EndsWith(ReadNewLine)) // Check for line ending
                         {
                             string res = readObject.lineRecvResult.ToString();
-                            augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
-                            augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                            augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
+                            augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
                             LineReceived?.Invoke(res); // Invoke the callback
                             readObject.lineRecvResult.Clear(); // Clear out the string buffer
                         }
                     }
                 }
 
-                Array.Clear(readObject.buffer, 0, recvSize); // Clear the receive buffer
+                Array.Clear(readObject.buffer, 0, RecvSize); // Clear the receive buffer
 
                 try
                 {
-                    client.BeginReceive(readObject.buffer, 0, recvSize, SocketFlags.None, new AsyncCallback(ReceiveCallback), readObject); // Try reading the stream again
+                    client.BeginReceive(readObject.buffer, 0, RecvSize, SocketFlags.None, new AsyncCallback(ReceiveCallback), readObject); // Try reading the stream again
                 }
                 catch (Exception) // Something went wrong
                 {
@@ -2762,28 +3005,10 @@ namespace NetLib
             /// <param name="data">The line to write to the stream</param>
             public void WriteLine(string data)
             {
-                augmentations.ForEach((aug) => data = aug.OnBeforeSendString(data, sendEncoder)); // Let the augmentations modify the data
-                augmentations.ForEach((aug) => aug.OnAfterSendString(data, sendEncoder)); // Let the augmentations inspect the data
-                byte[] sendBuffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to bytes
+                augmentations.ForEach((aug) => data = aug.OnBeforeSendString(data, SendEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterSendString(data, SendEncoder)); // Let the augmentations inspect the data
+                byte[] sendBuffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to bytes
                 DirectWrite(sendBuffer, 0, sendBuffer.Length); // Write the bytes to the stream
-            }
-
-            /// <summary>
-            /// Set the send encoding to encode new lines with
-            /// </summary>
-            /// <param name="encoding">The encoding to use</param>
-            public void SetSendEncoding(Encoding encoding)
-            {
-                sendEncoder = encoding; // Set the encoding
-            }
-
-            /// <summary>
-            /// Set the new line terminator for when sending new lines
-            /// </summary>
-            /// <param name="newLine">The line terminator to use</param>
-            public void SetSendNewLine(string newLine)
-            {
-                writeNewLine = newLine; // Set the line terminator
             }
 
             /// <summary>
@@ -2793,7 +3018,7 @@ namespace NetLib
             public void InstallAugmentation(Augmentation augmentation)
             {
                 augmentations.Add(augmentation); // Add the augmentation to the list
-                if (!fromServer) augmentation.OnInstalled(); // Notify the augmentation of the installation
+                if (!fromServer) augmentation.OnInstalled(this); // Notify the augmentation of the installation
             }
 
             /// <summary>
@@ -2824,15 +3049,6 @@ namespace NetLib
             /// The domain or address of the server to connect to
             /// </summary>
             private string serverDestination;
-
-            /// <summary>
-            /// Init the client
-            /// </summary>
-            /// <param name="certWarn">True to ignore certificate warnings, otherwise false</param>
-            public SSLClient(bool certWarn) : base()
-            {
-                ClientInit(certWarn); // Init the client
-            }
 
             /// <summary>
             /// Init the clinet
@@ -2918,11 +3134,11 @@ namespace NetLib
                     receiveCallbackMode = enableCode; // Set the caller callback
                     Utils.NetworkIO.ClientReadObject readObject = new Utils.NetworkIO.ClientReadObject() // Define new read object
                     {
-                        buffer = new byte[recvSize], // Define the bytes buffer
+                        buffer = new byte[RecvSize], // Define the bytes buffer
                         lineRecvResult = new StringBuilder() // Define the string buffer
                     };
 
-                    sslStream.BeginRead(readObject.buffer, 0, recvSize, new AsyncCallback(ReceiveCallbackSSL), readObject); // Begin reading from the stream
+                    sslStream.BeginRead(readObject.buffer, 0, RecvSize, new AsyncCallback(ReceiveCallbackSSL), readObject); // Begin reading from the stream
                 }
                 else if (receiveCallbackMode != Utils.NetworkIO.ReadEventCodes.Both && receiveCallbackMode != enableCode) receiveCallbackMode = enableCode; // Enable the other callback too
             }
@@ -2963,24 +3179,24 @@ namespace NetLib
 
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
                     {
-                        string subResult = recvEncoder.GetString(dataBuffer, 0, bytesRead); // Encode the bytes to string
+                        string subResult = RecvEncoder.GetString(dataBuffer, 0, bytesRead); // Encode the bytes to string
                         readObject.lineRecvResult.Append(subResult); // Appnend the data to the string buffer
-                        if (subResult.EndsWith(readNewLine)) // Check if the buffer ends with the new line
+                        if (subResult.EndsWith(ReadNewLine)) // Check if the buffer ends with the new line
                         {
                             string res = readObject.lineRecvResult.ToString(); // Get the resulting string
-                            augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
-                            augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                            augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
+                            augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
                             LineReceivedMethod(res); // Invoke the new line event
                             readObject.lineRecvResult.Clear(); // Clear the string buffer
                         }
                     }
                 }
 
-                Array.Clear(readObject.buffer, 0, recvSize); // Clear the receive buffer
+                Array.Clear(readObject.buffer, 0, RecvSize); // Clear the receive buffer
 
                 try
                 {
-                    sslStream.BeginRead(readObject.buffer, 0, recvSize, new AsyncCallback(ReceiveCallbackSSL), readObject); // Re-Read from the stream
+                    sslStream.BeginRead(readObject.buffer, 0, RecvSize, new AsyncCallback(ReceiveCallbackSSL), readObject); // Re-Read from the stream
                 }
                 catch (Exception) // Something went wrong
                 {
@@ -3046,17 +3262,17 @@ namespace NetLib
 
                 while (true) // Loop infinitely
                 {
-                    byte[] buffer = new byte[recvSize]; // Define the receive buffer
-                    int bytesRead = sslStream.Read(buffer, 0, recvSize); // Read bytes from the stream
-                    string subResult = recvEncoder.GetString(buffer, 0, bytesRead); // Convert the bytes read to string
+                    byte[] buffer = new byte[RecvSize]; // Define the receive buffer
+                    int bytesRead = sslStream.Read(buffer, 0, RecvSize); // Read bytes from the stream
+                    string subResult = RecvEncoder.GetString(buffer, 0, bytesRead); // Convert the bytes read to string
                     result.Append(subResult); // Append the string to the string buffer
-                    if (subResult.EndsWith(readNewLine)) break; // Stop if a line has ended
+                    if (subResult.EndsWith(ReadNewLine)) break; // Stop if a line has ended
                 }
 
                 string res = result.ToString(); // Get the resulting string
 
-                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, recvEncoder)); // Let the augmentations modify the data
-                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, recvEncoder)); // Let the augmentations inspect the data
+                augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
 
                 return res; // Return the current new line
             }
@@ -3106,9 +3322,9 @@ namespace NetLib
             /// <param name="data">The line to write out</param>
             public new void WriteLine(string data)
             {
-                augmentations.ForEach((aug) => data = aug.OnBeforeReceiveString(data, sendEncoder)); // Let the augmentations modify the data
-                augmentations.ForEach((aug) => aug.OnAfterReceiveString(data, sendEncoder)); // Let the augmentations inspect the data
-                byte[] buffer = sendEncoder.GetBytes(data + writeNewLine); // Convert the line and the terminator to a byte array
+                augmentations.ForEach((aug) => data = aug.OnBeforeReceiveString(data, SendEncoder)); // Let the augmentations modify the data
+                augmentations.ForEach((aug) => aug.OnAfterReceiveString(data, SendEncoder)); // Let the augmentations inspect the data
+                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
                 DirectWrite(buffer, 0, buffer.Length); // Write the bytes to the stream
             }
 
