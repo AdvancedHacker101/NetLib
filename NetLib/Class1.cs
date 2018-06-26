@@ -14,6 +14,73 @@ using NetLib.Interfaces;
 
 namespace NetLib
 {
+    /// <summary>
+    /// A set of extension methods for simple tasks
+    /// </summary>
+    public static class Extensions
+    {
+        /// <summary>
+        /// Convert a string response to a response object
+        /// </summary>
+        /// <param name="data">The string to convert</param>
+        /// <returns>A response object</returns>
+        public static Utils.FTP.Response ToResponse(this string data)
+        {
+            int sCode = data.Substring(0, 3).ToInt(); // Get the status code of the response
+            string msg = data.Substring(4); // Get the message of the response
+            msg = msg.Substring(0, msg.Length - 2); // Remove the new line from the message
+            return new Utils.FTP.Response() // Construct the response
+            {
+                statusCode = (Utils.FTP.StatusCode)sCode, // Set the status code
+                message = msg // Set the message
+            };
+        }
+
+        /// <summary>
+        /// Convert a string short month name to an integer month value
+        /// </summary>
+        /// <param name="value">The string to convert</param>
+        /// <returns>The integer value of the month</returns>
+        public static int ToMonth(this string value)
+        {
+            string v = value; // Get another refrence
+            v = v.ToLower(); // Convert to lower
+                             // Return based on the value
+            if (v == "jan") return 1;
+            else if (v == "feb") return 2;
+            else if (v == "mar") return 3;
+            else if (v == "apr") return 4;
+            else if (v == "may") return 5;
+            else if (v == "jun") return 6;
+            else if (v == "jul") return 7;
+            else if (v == "aug") return 8;
+            else if (v == "sep") return 9;
+            else if (v == "oct") return 10;
+            else if (v == "nov") return 11;
+            else return 12;
+        }
+
+        /// <summary>
+        /// Convert a string value to an integer value
+        /// </summary>
+        /// <param name="value">The string to convert</param>
+        /// <returns>The integer converted from the string</returns>
+        public static int ToInt(this string value)
+        {
+            return int.Parse(value); // Return the integer value
+        }
+
+        /// <summary>
+        /// Convert the string value to a long value
+        /// </summary>
+        /// <param name="value">The string to convert</param>
+        /// <returns>The long converted from the string</returns>
+        public static long ToLong(this string value)
+        {
+            return long.Parse(value); // Return the long value
+        }
+    }
+
     namespace Interfaces
     {
         /// <summary>
@@ -3340,6 +3407,284 @@ namespace NetLib
                 base.GracefulStop(); // Call stop on the base client
             }
         }
+
+        /// <summary>
+        /// Simple basic FTP client
+        /// </summary>
+        public class FTPClient
+        {
+            /// <summary>
+            /// The socket used for writing data
+            /// </summary>
+            private INetworkWriter write;
+            /// <summary>
+            /// The socket used for reading data
+            /// </summary>
+            private INetworkReader read;
+            /// <summary>
+            /// The socket used for client control
+            /// </summary>
+            private INetworkSocket socket;
+            /// <summary>
+            /// Indicates if the connection is over SSL
+            /// </summary>
+            private readonly bool ssl = false;
+            /// <summary>
+            /// True to validate certificates, otherwise false
+            /// </summary>
+            private bool checkSSL = true;
+            /// <summary>
+            /// The default port of an FTP server
+            /// </summary>
+            const int ftpDefaultPort = 21;
+            /// <summary>
+            /// The default username of an FTP server
+            /// </summary>
+            const string ftpDefaultUsername = "anonymous";
+            /// <summary>
+            /// The message after the client connects
+            /// </summary>
+            public string ServerInformation { get; internal set; } = "";
+            /// <summary>
+            /// Buffer for collection data channel bytes
+            /// </summary>
+            private byte[] pasvBuffer;
+            /// <summary>
+            /// The socket of the data channel
+            /// </summary>
+            private INetworkSocket dataSocket;
+
+            /// <summary>
+            /// Create a new FTP client
+            /// </summary>
+            /// <param name="useSSL">Set it to true to use ssl when connection to the server</param>
+            public FTPClient(bool useSSL = false)
+            {
+                ssl = useSSL; // Set the ssl flag
+            }
+
+            /// <summary>
+            /// Change if the server should check if a certificate is valid
+            /// </summary>
+            /// <param name="check">True to check certificates, otherwise false</param>
+            public void CheckCertificateValidity(bool check)
+            {
+                checkSSL = check; // Set the validation flag
+            }
+
+            /// <summary>
+            /// Connect to a server, with the default credentials
+            /// </summary>
+            /// <param name="hostname">The domain name or IP of the server to connect to</param>
+            public void Connect(string hostname)
+            {
+                Connect(hostname, ftpDefaultPort, ftpDefaultUsername, ""); // Connect to the server
+            }
+
+            /// <summary>
+            /// Connect to a server with the default credentials on the specified port
+            /// </summary>
+            /// <param name="hostname">The domain name or IP of the server to connect to</param>
+            /// <param name="port">The port to connect to on the server</param>
+            public void Connect(string hostname, int port)
+            {
+                Connect(hostname, port, ftpDefaultUsername, ""); // Connect to the server
+            }
+
+            /// <summary>
+            /// Connect to a server
+            /// </summary>
+            /// <param name="hostname">The domain name or IP of the server to connect to</param>
+            /// <param name="port">The port of the server to connect to</param>
+            /// <param name="username">The username to login to the FTP server with</param>
+            /// <param name="password">The password to login to the FTP server with</param>
+            public void Connect(string hostname, int port, string username, string password)
+            {
+                if (ssl) // Use SSL
+                {
+                    SSLClient client = new SSLClient(Utils.IPv4.CreateEndPoint(hostname, port), checkSSL); // Create a new ssl client
+                    // Set the new line endings
+                    client.ReadNewLine = "\r\n";
+                    client.WriteNewLine = "\r\n";
+                    client.Start(); // Connect to the server
+                    // Set the sockets
+                    write = client as INetworkWriter;
+                    read = client as INetworkReader;
+                    socket = client as INetworkSocket;
+                }
+                else
+                {
+                    TcpClient client = new TcpClient(Utils.IPv4.CreateEndPoint(hostname, port)); // Create a new tcp client
+                    // Set the nwe line endings
+                    client.ReadNewLine = "\r\n";
+                    client.WriteNewLine = "\r\n";
+                    client.Start(); // Connect to the server
+                    // Set the sockets
+                    write = client as INetworkWriter;
+                    read = client as INetworkReader;
+                    socket = client as INetworkSocket;
+                }
+
+                GetServer(); // Get the message of the server
+                Login(username, password); // Login to the server
+                SetType(); // Set the transfer type
+                Pwd(); // Get the current working directory
+            }
+
+            /// <summary>
+            /// Connect to the data channel on the FTP server
+            /// </summary>
+            private void ConnectDataPort()
+            {
+                Tuple<string, int> result = GetDataPort(); // Get the ip and port to connect to
+                TcpClient ftpData = new TcpClient(Utils.IPv4.CreateEndPoint(result.Item1, result.Item2)); // Create a new tcp client
+                ftpData.Start(); // Connect to the server
+                dataSocket = ftpData as INetworkSocket; // Get the data channel socket
+                pasvBuffer = new byte[0]; // Init the receive buffer
+
+                ftpData.AddEventDataReceived((data) => // When new data received
+                {
+                    int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
+                    byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
+                    Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
+                    pasvBuffer = new byte[newLength]; // Create a new buffer
+                    Array.Copy(tmp, pasvBuffer, tmp.Length); // Copy the previous buffer
+                    Array.ConstrainedCopy(data, 0, pasvBuffer, tmp.Length, data.Length); // Copy the received data
+                });
+            }
+
+            /// <summary>
+            /// Get the IP and port to connect to on a passive connection
+            /// </summary>
+            /// <returns>The IP and port to connect to</returns>
+            private Tuple<string, int> GetDataPort()
+            {
+                string getDataPort = (new Utils.FTP.Request() { command = "PASV", arguments = "" }).ToString(); // Get the command
+                write.WriteLine(getDataPort); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(); // Wait for response
+                if (resp.statusCode != Utils.FTP.StatusCode.EnterPasvMode) throw new Exception("Failed to start entering to passive mode"); // Throw an exception if unexpected status code
+                return Utils.FTP.GetPasvDestination(resp.message); // Return the parsed data
+            }
+
+            /// <summary>
+            /// Set the transfer type
+            /// </summary>
+            /// <param name="type">Set to "I" for binary mode and set to "A" for ASCII mode</param>
+            private void SetType(string type = "I")
+            {
+                string setType = (new Utils.FTP.Request() { command = "TYPE", arguments = type }).ToString(); // Get the command to send
+                write.WriteLine(setType); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new Exception("Failed to set the transfer type"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// List a directory's children
+            /// </summary>
+            /// <param name="directory">The directory to list the children of</param>
+            /// <returns>A list of files inside the directory</returns>
+            public Utils.FTP.File[] ListDirectory(string directory)
+            {
+                ConnectDataPort(); // Begin pasv connection
+                ListFiles(); // Send the file list command (blocking call until file listing finishes)
+                dataSocket.ForceStop(); // Kill the data channel
+                string result = socket.RecvEncoder.GetString(pasvBuffer); // Get the string result of the data buffer
+                return Utils.FTP.ParseFileList(result); // Return the file list
+            }
+            
+            /// <summary>
+            /// Send the file list command to the server
+            /// </summary>
+            private void ListFiles()
+            {
+                string listDirectory = (new Utils.FTP.Request() { command = "LIST", arguments = "" }).ToString(); // Get the list command
+                write.WriteLine(listDirectory); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ReceiveFtpData) throw new Exception("Failed to start the listing of the requested directory"); // Throw if unexpected status code
+                resp = GetResponse(); // Get the next response
+                if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new Exception("Failed to get the file list of the directory"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// Get a response from the FTP server
+            /// </summary>
+            /// <returns>The current response from the FTP server</returns>
+            private Utils.FTP.Response GetResponse()
+            {
+                string result = read.ReadLineAsync().Result; // Get the next line from the server
+                Utils.FTP.Response r = result.ToResponse(); // Parse the response
+                if (r.statusCode == Utils.FTP.StatusCode.Timeout) // Check if we're timed out
+                {
+                    throw new TimeoutException("The server dropped the connection due to too much inactive time"); // Throw an exception if we're timed out
+                }
+                return r; // Return the response of the server
+            }
+
+            /// <summary>
+            /// Get the message of the server after connecting
+            /// </summary>
+            private void GetServer()
+            {
+                Utils.FTP.Response r = GetResponse(); // Get the response of the server
+                if (r.statusCode == Utils.FTP.StatusCode.ReadyNewUser) // Check th status code
+                {
+                    ServerInformation = r.message; // Set the message of the server
+                }
+            }
+
+            /// <summary>
+            /// Change the current working directory
+            /// </summary>
+            /// <param name="targetDirectory">The directory to change to</param>
+            private void Cwd(string targetDirectory)
+            {
+                string setWorkingDirectory = (new Utils.FTP.Request() { command = "CWD", arguments = targetDirectory }).ToString(); // Get the command to send
+                write.WriteLine(setWorkingDirectory); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new Exception("Failed to change the working directory"); // Check if the status code is positive
+            }
+
+            /// <summary>
+            /// Get the current working directory
+            /// </summary>
+            /// <returns>The path of the current working directory</returns>
+            public string Pwd()
+            {
+                string getWorkingDirectory = (new Utils.FTP.Request() { command = "PWD", arguments = "" }).ToString(); // Get the command to send
+                write.WriteLine(getWorkingDirectory); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new Exception("Failed to get the current working directory"); // Check if the status code is positive
+                // Format and return the current path
+                string wdir = resp.message.Substring(1);
+                wdir = wdir.Substring(0, wdir.Length - 1);
+                return wdir;
+            }
+
+            /// <summary>
+            /// Login to the FTP server
+            /// </summary>
+            /// <param name="user">The username to login with</param>
+            /// <param name="pass">The password to login with</param>
+            /// <returns>True if logged in, otherwise false</returns>
+            private bool Login(string user, string pass)
+            {
+#if Validation_hard
+                if (socket == null) throw new InvalidOperationException("Tried to login without connecting to the server"); // Check if the socket is alive
+#endif
+                string setUsername = (new Utils.FTP.Request() { command = "USER", arguments = user }).ToString(); // Get the username command
+                string setPassword = (new Utils.FTP.Request() { command = "PASS", arguments = pass }).ToString(); // Get the password command
+                write.WriteLine(setUsername); // Send the username
+                Utils.FTP.Response resp = GetResponse(); // Get the response from the server
+                if (resp.statusCode == Utils.FTP.StatusCode.SendPassword) // Check if we can send the username
+                {
+                    write.WriteLine(setPassword); // Send the password
+                    resp = GetResponse(); // Get the response
+                    return resp.statusCode == Utils.FTP.StatusCode.LoginSuccess; // Check if the login was successful
+                }
+
+                return false; // Failed to login
+            }
+        }
     }
 
     namespace Utils
@@ -3419,7 +3764,7 @@ namespace NetLib
                 {
                     currentPID = System.Diagnostics.Process.GetCurrentProcess().Id; // Get the current PID
                 }
-
+                
                 int randomInteger = randomIncrementor + milliSeconds + currentPID; // Add the random values together
                 string randomValue = randomInteger.ToString("X"); // Convert them to a hex string
                 randomIncrementor++; // Increment the incrementor
@@ -3553,6 +3898,313 @@ namespace NetLib
                 Tuple<bool, IPAddress> ip = IsValidDestination(destination);
                 if (!ip.Item1) throw new ArgumentException("The specified destination is invalid!");
                 return new IPEndPoint(ip.Item2, portNumber);
+            }
+        }
+
+        /// <summary>
+        /// FTP Utils
+        /// </summary>
+        public class FTP
+        {
+            /// <summary>
+            /// An FTP Control Request
+            /// </summary>
+            public struct Request
+            {
+                /// <summary>
+                /// The command
+                /// </summary>
+                public string command;
+                /// <summary>
+                /// The command's arguments
+                /// </summary>
+                public string arguments;
+                /// <summary>
+                /// Convert the request to a string
+                /// </summary>
+                /// <returns>The string value of the request</returns>
+                public override string ToString()
+                {
+                    return $"{command} {arguments}"; // Return the request
+                }
+            }
+
+            /// <summary>
+            /// An FTP Control Response
+            /// </summary>
+            public struct Response
+            {
+                /// <summary>
+                /// The status code of the action
+                /// </summary>
+                public StatusCode statusCode;
+                /// <summary>
+                /// The message of the response
+                /// </summary>
+                public string message;
+            }
+
+            /// <summary>
+            /// FTP File list information
+            /// </summary>
+            public struct File
+            {
+                /// <summary>
+                /// The name of the file
+                /// </summary>
+                public string fileName;
+                /// <summary>
+                /// The size of the file in bytes
+                /// </summary>
+                public long fileSize;
+                /// <summary>
+                /// The permissions of the file
+                /// </summary>
+                public string filePermissions;
+                /// <summary>
+                /// True if the file is a directory
+                /// </summary>
+                public bool isDirectory;
+                /// <summary>
+                /// The number of children of a directory
+                /// </summary>
+                public int numberOfChildren;
+                /// <summary>
+                /// The user-id who owns the file
+                /// </summary>
+                public int uid;
+                /// <summary>
+                /// The group-id who owns the file
+                /// </summary>
+                public int gid;
+                /// <summary>
+                /// The time the file was last modified
+                /// </summary>
+                public DateTime lastModifiedTime;
+                /// <summary>
+                /// Represent the file's data in with a string value
+                /// </summary>
+                /// <returns>The string value of the file</returns>
+                public override string ToString()
+                {
+                    return $"P: {filePermissions} NoC: {numberOfChildren} UID: {uid} GID: {gid} Size: {fileSize} Last Modification: {lastModifiedTime.ToShortDateString()} Name: {fileName} Directory: {isDirectory}"; // Return the appended result
+                }
+            }
+
+            /// <summary>
+            /// Response status codes from the server
+            /// </summary>
+            public enum StatusCode : int
+            {
+                /// <summary>
+                /// The server is ready to serve a new user
+                /// </summary>
+                ReadyNewUser = 220,
+                /// <summary>
+                /// A control action is successful
+                /// </summary>
+                Success = 200,
+                /// <summary>
+                /// The server wants the client to send the password
+                /// </summary>
+                SendPassword = 331,
+                /// <summary>
+                /// The username and password were correct
+                /// </summary>
+                LoginSuccess = 230,
+                /// <summary>
+                /// You didn't do anything for a while an the server dropped the connection
+                /// </summary>
+                Timeout = 421,
+                /// <summary>
+                /// The server successfully created the pathname variable
+                /// </summary>
+                PathnameCreated = 257,
+                /// <summary>
+                /// A file transfer action succeeded
+                /// </summary>
+                ActionSuccess = 250,
+                /// <summary>
+                /// You're about to enter passivr mode
+                /// </summary>
+                EnterPasvMode = 227,
+                /// <summary>
+                /// You're about to receive data on the data channel
+                /// </summary>
+                ReceiveFtpData = 150,
+                /// <summary>
+                /// Closing the data channel with successful transfer
+                /// </summary>
+                CloseFtpDataSuccess = 226
+            }
+
+            /// <summary>
+            /// Get the ip and port to connect to from a string response
+            /// </summary>
+            /// <param name="response">The response to get the data from</param>
+            /// <returns>The ip and the port to connect to</returns>
+            public static Tuple<string, int> GetPasvDestination(string response)
+            {
+                int start = response.IndexOf('(') + 1; // Get the start of the substring
+                int end = response.IndexOf(')'); // Get the end of the substring
+                string details = response.Substring(start, response.Length - start - (response.Length - end)); // Get the ip and the port string from the response
+                string ip = ""; // Define IP
+                int port = 0; // Define Port
+                string[] dataParts = details.Split(','); // Split the data into numbers
+                for (int i = 0; i < 4; i++) // Construct the IP Address
+                {
+                    ip += dataParts[i] + "."; // Append the part to the IP
+                }
+                ip = ip.Substring(0, ip.Length - 1); // Remove the trailing dot
+                int p1 = dataParts[4].ToInt(); // Convert the port1 to int
+                int p2 = dataParts[5].ToInt(); // Convert the port2 to int
+                port = p1 * 256 + p2; // Calculate the destination port
+                return new Tuple<string, int>(ip, port); // Return the connection data
+            }
+
+            /// <summary>
+            /// Generate a file list based on the response from the LIST command
+            /// </summary>
+            /// <param name="result">The result of the LIST command</param>
+            /// <returns>The parsed file list</returns>
+            public static File[] ParseFileList(string result)
+            {
+                string[] files = result.Split(new string[] { "\r\n" }, StringSplitOptions.None); // Get the files one-by-one
+                List<File> finalResult = new List<File>(); // Define the result list
+
+                foreach (string file in files) // Loop through the files
+                {
+                    if (file == "") continue; // Skip empty files
+                    string fileName = ""; // The name of the file
+                    string permissions = ""; // File permissions
+                    string numberOfChildren = ""; // Number of children
+                    string uid = ""; // User id
+                    string gid = ""; // Group id
+                    string date = ""; // Last modify date
+                    string size = ""; // Total size in bytes
+                    bool pDone = false; // Indicates if the permissions are parsed
+                    bool cDone = false; // Indicates if the number of children is parsed
+                    bool uDone = false; // Indicates if the user id is parsed
+                    bool gDone = false; // Indicates if the group id is parsed
+                    bool sDone = false; // Indicates if the size of the file is parsed
+                    bool dDone = false; // Indicates if the last modify date is parsed
+                    int prevDateLength = 0; // The length of the date string in the previous loop
+                    int dateParts = 0; // Indicates the number of date-time data parts parsed
+
+                    for (int i = 0; i < file.Length; i++) // Go through the characters
+                    {
+                        char current = file[i]; // Get the current character
+                        if (!pDone) // Permissions not parsed
+                        {
+                            if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
+                            {
+                                pDone = true; // Permissions parsed
+                                continue; // Skip the whitespace
+                            }
+                            permissions += current; // Add the current char to the permission string
+                        }
+                        
+                        if (pDone && !cDone) // Permissions parsed, number of children not
+                        {
+                            if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
+                            {
+                                if (numberOfChildren.Length > 0) cDone = true; // Number of children parsed if data is present
+                                continue; // Skip the whitespace
+                            }
+                            numberOfChildren += current; // Add the current char to the number of children string
+                        }
+
+                        if (cDone && !uDone) // Number of children parsed, user id not
+                        {
+                            if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
+                            {
+                                if (uid.Length > 0) uDone = true; // User id parsed if data is present
+                                continue; // Skip the whitespace
+                            }
+                            uid += current; // Add the current char to the user id string
+                        }
+
+                        if (uDone && !gDone) // User id parsed, group id not
+                        {
+                            if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
+                            {
+                                if(gid.Length > 0) gDone = true; // Group id parsed if data is present
+                                continue; // Skip the whitespace
+                            }
+                            gid += current; // Add the current char to the group id string
+                        }
+
+                        if (gDone && !sDone) // Group id parsed, file size not
+                        {
+                            if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
+                            {
+                                if (size.Length > 0) sDone = true; // file size parsed if data is present
+                                continue; // Skip the whitespace
+                            }
+                            size += current; // Add the current char to the file size string
+                        }
+
+                        if (sDone && !dDone) // File size parsed, date not
+                        {
+                            if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
+                            {
+                                if (date.Length != prevDateLength) // Check if the string is modified after the last whitespace encounter
+                                {
+                                    dateParts++; // We have another date part
+                                    prevDateLength = date.Length; // Set the length to the current length
+                                }
+
+                                if (dateParts == 3) dDone = true; // If we have 3 parts then we're done
+                                continue; // Skip the whitespace
+                            }
+                            date += current; // Add the current char to the date string
+                        }
+
+                        if (dDone) // If the date if parsed
+                        {
+                            fileName += current; // Add the current char to the file string
+                        }
+                    }
+                    File f = new File() // Construct the file object
+                    {
+                        fileName = fileName, // Set the file name
+                        filePermissions = permissions, // Set the file permissions
+                        fileSize = size.ToLong(), // Set the file size
+                        uid = uid.ToInt(), // Set the user id
+                        gid = gid.ToInt(), // Set the group id
+                        isDirectory = permissions.StartsWith("d"), // Determine if file is a directory
+                        numberOfChildren = numberOfChildren.ToInt(), // Set the number of children
+                        lastModifiedTime = ParseFileModifyTime(date) // Set the last modified time
+                    };
+                    finalResult.Add(f); // Add the file to the list
+                }
+
+                return finalResult.ToArray(); // Retrun an array of files
+            }
+
+            /// <summary>
+            /// Get the last modify time from an ftp LIST date
+            /// </summary>
+            /// <param name="timeStr">The date string to parse</param>
+            /// <returns>A date time object from the available data</returns>
+            public static DateTime ParseFileModifyTime(string timeStr)
+            {
+                string month = timeStr.Substring(0, 3); // Get the month
+                string day = timeStr.Substring(3, 2); // Get the day
+                string year = ""; // Define the year
+                string hours = "00"; // Define the hours
+                string minutes = "00"; // Define the minutes
+                string rest = timeStr.Substring(5); // Get the rest of the string, without the month, and day
+                if (rest.Contains(":")) // Check if the rest of the string is a time
+                {
+                    year = DateTime.Now.Year.ToString(); // Set the year to the current year
+                    string[] time = rest.Split(':'); // Split the time string
+                    hours = time[0]; // Set the hours
+                    minutes = time[1]; // Set the minutes
+                }
+                else year = rest; // Set the year to the rest of the string
+
+                return new DateTime(year.ToInt(), month.ToMonth(), day.ToInt(), hours.ToInt(), minutes.ToInt(), 0); // Return the datetime object
             }
         }
 
