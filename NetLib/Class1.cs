@@ -20,6 +20,19 @@ namespace NetLib
     public static class Extensions
     {
         /// <summary>
+        /// Combine two string only dictionaries
+        /// </summary>
+        /// <param name="target">The dictionary to copy the values to</param>
+        /// <param name="source">The dictionary to copy the values from</param>
+        public static void Merge(this Dictionary<string, string> target, Dictionary<string, string> source)
+        {
+            foreach (KeyValuePair<string, string> kvp in source)
+            {
+                target.Add(kvp.Key, kvp.Value);
+            }
+        }
+
+        /// <summary>
         /// Convert a string response to a response object
         /// </summary>
         /// <param name="data">The string to convert</param>
@@ -228,6 +241,26 @@ namespace NetLib
             /// Uninstall the augmentation
             /// </summary>
             void UninstallAugmentation(Augmentation a);
+        }
+
+        /// <summary>
+        /// Basic network client functionallity
+        /// </summary>
+        public interface INetworkClient
+        {
+            /// <summary>
+            /// Get the underlying network stream of the client socket
+            /// </summary>
+            /// <returns></returns>
+            NetworkStream GetRawStream();
+            /// <summary>
+            /// Close the network stream, but leave the client open
+            /// </summary>
+            void CloseStream();
+            /// <summary>
+            /// How many ms to wait before cancelling a read operation
+            /// </summary>
+            int ReadTimeout { get; set; }
         }
 
         /// <summary>
@@ -2650,7 +2683,7 @@ namespace NetLib
         /// <summary>
         /// Basic TCP Client
         /// </summary>
-        public class TcpClient : INetworkReader, INetworkWriter, INetworkSocket, IAugmentable
+        public class TcpClient : INetworkReader, INetworkWriter, INetworkSocket, IAugmentable, INetworkClient
         {
             /// <summary>
             /// The endpoint to connect to
@@ -2680,6 +2713,25 @@ namespace NetLib
             /// New line terminator for sending new lines
             /// </summary>
             public string WriteNewLine { get; set; }
+            /// <summary>
+            /// How many ms to wait before cancelling read operation
+            /// </summary>
+            public int ReadTimeout
+            {
+                get
+                {
+                    return _readTimeout;
+                }
+                set
+                {
+                    _readTimeout = value;
+                    if (client != null) client.ReceiveTimeout = _readTimeout;
+                }
+            }
+            /// <summary>
+            /// Backing field for the read timeout property
+            /// </summary>
+            private int _readTimeout;
             /// <summary>
             /// Event for receiving byte data
             /// </summary>
@@ -2730,6 +2782,7 @@ namespace NetLib
                 SendEncoder = Encoding.ASCII; // Init the send string encoding
                 RecvEncoder = Encoding.ASCII; // Init the read string encoding
                 receiveCallbackMode = Utils.NetworkIO.ReadEventCodes.Stopped; // Set the receive event mode
+                ReadTimeout = -1; // Set the read timeout
             }
 
             /// <summary>
@@ -2772,6 +2825,16 @@ namespace NetLib
             }
 
             /// <summary>
+            /// Get the underlying network stream of the client
+            /// </summary>
+            /// <returns>The network stream of the client socket</returns>
+            public NetworkStream GetRawStream()
+            {
+                if (client == null || !client.Connected) return null; // Check if the client isn't started/connected
+                return new NetworkStream(client); // Return the network stream of the socket
+            }
+
+            /// <summary>
             /// Start the client
             /// </summary>
             public void Start()
@@ -2780,6 +2843,7 @@ namespace NetLib
                 if (clientEndPoint == null) throw new NullReferenceException("The EndPoint to connect to is null"); // Check if the endpoint isn't set
 #endif
                 client.Connect(clientEndPoint); // Connect to the endpoint
+                client.ReceiveTimeout = ReadTimeout; // Set the read timeout
                 clientOffline = false; // The client is running now
                 if (!fromServer) augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to augmentations if we're not created from a server class
             }
@@ -2795,7 +2859,15 @@ namespace NetLib
                 if (client == null || !client.Connected) throw new InvalidOperationException("Cannot read from an offline client"); // Check if the client's online
 #endif
                 byte[] buffer = new byte[maxSize]; // Define the receive buffer
-                int bytesRead = client.Receive(buffer, 0, maxSize, SocketFlags.None); // Read bytes from the stream
+                int bytesRead = 0; // Define read bytes count
+                try
+                {
+                    bytesRead = client.Receive(buffer, 0, maxSize, SocketFlags.None); // Read bytes from the stream
+                }
+                catch (System.IO.IOException) // Timeout happened
+                {
+                    return null; // Return empty result
+                }
                 byte[] dataBuffer = new byte[bytesRead]; // Define data buffer
                 Array.Copy(buffer, dataBuffer, bytesRead); // Copy the bytes read from the stream
 
@@ -2820,7 +2892,15 @@ namespace NetLib
                 while (true) // Inifinite loop
                 {
                     byte[] buffer = new byte[RecvSize]; // Define receive buffer
-                    int bytesRead = client.Receive(buffer, 0, RecvSize, SocketFlags.None); // Read bytes from the stream
+                    int bytesRead = 0; // Define read bytes length
+                    try
+                    {
+                        bytesRead = client.Receive(buffer, 0, RecvSize, SocketFlags.None); // Read bytes from the stream
+                    }
+                    catch (System.IO.IOException) // Timeout happened
+                    {
+                        return null; // Return empty result
+                    }
                     string subResult = RecvEncoder.GetString(buffer, 0, bytesRead); // Decode bytes read into strings
                     result.Append(subResult); // Append to the total result
                     if (subResult.EndsWith(ReadNewLine)) break; // If the data ends with a new line, return it
@@ -2907,6 +2987,14 @@ namespace NetLib
                 try
                 {
                     bytesRead = client.EndReceive(ar); // Read bytes from the stream
+                }
+                catch (System.IO.IOException ioex) // Timeout happened
+                {
+#if Logging_verbose
+                    Console.WriteLine("Suppressing read error, caused by timeout");
+                    Console.WriteLine(ioex);
+                    return;
+#endif
                 }
                 catch (Exception ex) // Something went wrong
                 {
@@ -3097,13 +3185,99 @@ namespace NetLib
                 augmentations.Remove(augmentation); // Remote the augmentation from the list
                 if (!fromServer) augmentation.OnUninstalled(); // Notify the augmentation of the installation
             }
+
+            /// <summary>
+            /// Close the stream of the socket, but leave the connection open
+            /// </summary>
+            public void CloseStream()
+            {
+                NetworkStream ns = new NetworkStream(client); // Get the network stream of the client
+                ns.Close(); // Close the stream
+                ns.Dispose(); // Release resources
+                ns = null; // Relese reference
+            }
         }
 
         /// <summary>
         /// SSL Network Client
         /// </summary>
-        public class SSLClient : TcpClient
+        public class SSLClient : INetworkSocket, INetworkReader, INetworkWriter, INetworkClient, IAugmentable
         {
+            /// <summary>
+            /// The endpoint to connect to
+            /// </summary>
+            protected IPEndPoint clientEndPoint;
+            /// <summary>
+            /// The client socket
+            /// </summary>
+            protected Socket client;
+            /// <summary>
+            /// Encoding for reading new lines
+            /// </summary>
+            public Encoding RecvEncoder { get; set; }
+            /// <summary>
+            /// Encoding for sending new lines
+            /// </summary>
+            public Encoding SendEncoder { get; set; }
+            /// <summary>
+            /// Maximum receive buffer size
+            /// </summary>
+            public int RecvSize { get; set; }
+            /// <summary>
+            /// New line terminator for reading new lines
+            /// </summary>
+            public string ReadNewLine { get; set; }
+            /// <summary>
+            /// New line terminator for sending new lines
+            /// </summary>
+            public string WriteNewLine { get; set; }
+            /// <summary>
+            /// How many ms to wait before cancelling a read operation
+            /// </summary>
+            public int ReadTimeout
+            {
+                get
+                {
+                    return _readTimeout;
+                }
+                set
+                {
+                    _readTimeout = value;
+                    if (sslStream != null) sslStream.ReadTimeout = _readTimeout;
+                }
+            }
+            /// <summary>
+            /// Backing field for the ReadTimeout property
+            /// </summary>
+            private int _readTimeout;
+            /// <summary>
+            /// Event for receiving byte data
+            /// </summary>
+            protected event Action<byte[]> DataReceived;
+            /// <summary>
+            /// Event for receiving new lines
+            /// </summary>
+            protected event Action<string> LineReceived;
+            /// <summary>
+            /// Enabled receive events
+            /// </summary>
+            protected Utils.NetworkIO.ReadEventCodes receiveCallbackMode;
+            /// <summary>
+            /// Indicates if the client's running
+            /// </summary>
+            protected bool clientOffline = true;
+            /// <summary>
+            /// Event for client disconnect notifications
+            /// </summary>
+            protected event Action ClientStopped;
+            /// <summary>
+            /// A list of installed augmentations
+            /// </summary>
+            protected List<Augmentation> augmentations = new List<Augmentation>();
+            /// <summary>
+            /// Indicates if a server socket created this client
+            /// </summary>
+            protected bool fromServer = false;
             /// <summary>
             /// SSL Stream to wrap the plain text stream in
             /// </summary>
@@ -3129,13 +3303,36 @@ namespace NetLib
             }
 
             /// <summary>
+            /// Init the tcp client
+            /// </summary>
+            private void TcpClientInit()
+            {
+                clientEndPoint = null; // Reset the endpoint
+                client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // Create a new client socket
+                RecvSize = 1024; // Set the receive buffer size
+                ReadNewLine = "\n"; // Init the read new line terminator
+                WriteNewLine = "\n"; // Init the write new line terminator
+                SendEncoder = Encoding.ASCII; // Init the send string encoding
+                RecvEncoder = Encoding.ASCII; // Init the read string encoding
+                receiveCallbackMode = Utils.NetworkIO.ReadEventCodes.Stopped; // Set the receive event mode
+                ReadTimeout = -1; // Set the read timeout
+            }
+
+            /// <summary>
             /// Init the client
             /// </summary>
             /// <param name="address">The hostname or address of the server</param>
-            /// <param name="port">The port to connect to</param>
+            /// <param name="portNumber">The port to connect to</param>
             /// <param name="certWarn">True to ignore certificate warnings, otherwise false</param>
-            public SSLClient(string address, int port, bool certWarn) : base(address, port)
+            public SSLClient(string address, int portNumber, bool certWarn)
             {
+                TcpClientInit(); // Init the client
+                Tuple<bool, IPAddress> ipResult = Utils.IPv4.IsValidDestination(address); // Check if the address is valid, and resolve dns if needed
+#if Validation_hard // Not important check, socket connection will throw anyways if any of the data is wrong
+                if (!ipResult.Item1) throw new ArgumentException($"The following destination is not valid: {address}"); // Invalid address or hostname not resolved
+                if (!Utils.IPv4.IsPortValid(portNumber)) throw new ArgumentException($"The following port number is not valid {portNumber}"); // Invalid port number
+#endif
+                clientEndPoint = new IPEndPoint(ipResult.Item2, portNumber); // Set the endpoint to connect to
                 ClientInit(certWarn); // Init the client
                 serverDestination = address; // Set the destination
             }
@@ -3145,8 +3342,10 @@ namespace NetLib
             /// </summary>
             /// <param name="ep">The endpoint to connect to</param>
             /// <param name="certWarn">True to ignore certificate warnings, otherwise false</param>
-            public SSLClient(IPEndPoint ep, bool certWarn) : base(ep)
+            public SSLClient(IPEndPoint ep, bool certWarn)
             {
+                TcpClientInit();
+                clientEndPoint = ep;
                 ClientInit(certWarn); // Init the client
                 serverDestination = ep.Address.ToString(); // Set the server destination
             }
@@ -3157,6 +3356,7 @@ namespace NetLib
             /// <param name="stream">The SSL Stream to wrap around</param>
             public SSLClient(System.Net.Security.SslStream stream)
             {
+                TcpClientInit();
                 fromServer = true;
                 ClientInit(false); // Init the client
                 sslStream = stream; //Set the ssl stream
@@ -3174,7 +3374,7 @@ namespace NetLib
             /// <summary>
             /// Start the client
             /// </summary>
-            public new void Start()
+            public void Start()
             {
                 if (IgnoreCertificateWarning) // Ignore certificate warnings
                 {
@@ -3184,9 +3384,15 @@ namespace NetLib
                         return true; // Return true, without any validation
                     });
                 }
-                base.Start(); // Start the base TCP Client
+#if Validation_soft // Important check
+                if (clientEndPoint == null) throw new NullReferenceException("The EndPoint to connect to is null"); // Check if the endpoint isn't set
+#endif
+                client.Connect(clientEndPoint); // Connect to the endpoint
+                clientOffline = false; // The client is running now
+                if (!fromServer) augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to augmentations if we're not created from a server class
                 NetworkStream ns = new NetworkStream(client); // Get the network stream of the client
                 sslStream = new System.Net.Security.SslStream(ns); // Wrap the stream inside ssl stream
+                sslStream.ReadTimeout = ReadTimeout;
                 sslStream.AuthenticateAsClient(serverDestination); // Authenticate to the server
             }
 
@@ -3222,6 +3428,14 @@ namespace NetLib
                 {
                     bytesRead = sslStream.EndRead(ar); // Read from the stream
                 }
+                catch (System.IO.IOException ioex) // Timeout happened
+                {
+#if Logging_verbose
+                    Console.WriteLine("Suppressing socket error, caused by timing out");
+                    Console.WriteLine(ioex);
+#endif
+                    return;
+                }
                 catch (Exception ex) // Something went wrong
                 {
 #if Logging_verbose
@@ -3241,7 +3455,7 @@ namespace NetLib
                     {
                         augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
                         augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentations inspect the data
-                        DataReceivedMethod(dataBuffer); // Invoke the data received event
+                        DataReceived?.Invoke(dataBuffer); // Invoke the data received event
                     }
 
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
@@ -3253,7 +3467,7 @@ namespace NetLib
                             string res = readObject.lineRecvResult.ToString(); // Get the resulting string
                             augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
                             augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
-                            LineReceivedMethod(res); // Invoke the new line event
+                            LineReceived?.Invoke(res); // Invoke the new line event
                             readObject.lineRecvResult.Clear(); // Clear the string buffer
                         }
                     }
@@ -3272,10 +3486,36 @@ namespace NetLib
             }
 
             /// <summary>
+            /// Stop the client forcefully
+            /// </summary>
+            public void ForceStop()
+            {
+                if (!fromServer) augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations if we're not created from server
+                if (clientOffline) return; // Check if the client isn't running
+#if Validation_soft // Important check
+                if (client == null) throw new InvalidOperationException("Cannot close an offline client"); // Client isn't running
+#endif
+                client.Close(); // Close the client
+                client.Dispose(); // Dispose the client
+                client = null; // Reset the client
+                clientOffline = true; // The client isn't running
+                ClientStopped?.Invoke(); // Invoke the client stopped event
+            }
+
+            /// <summary>
+            /// Add an event listener for when the client is stopped
+            /// </summary>
+            /// <param name="callback">The function to call when the client is disconnected</param>
+            public void AddEventClientStopped(Action callback)
+            {
+                ClientStopped += callback; // Add the function to the event
+            }
+
+            /// <summary>
             /// Add an event listener for when new bytes are available
             /// </summary>
             /// <param name="callback">The function to call when new bytes are available</param>
-            public new void AddEventDataReceived(Action<byte[]> callback)
+            public void AddEventDataReceived(Action<byte[]> callback)
             {
                 DataReceived += callback; // Add the function to the event
                 StartCallbackRead(Utils.NetworkIO.ReadEventCodes.DataRecv); // Start the callback
@@ -3285,7 +3525,7 @@ namespace NetLib
             /// Add and event listener for when new lines are available
             /// </summary>
             /// <param name="callback">The function to call when new lines are available</param>
-            public new void AddEventLineReceived(Action<string> callback)
+            public void AddEventLineReceived(Action<string> callback)
             {
                 LineReceived += callback; // Add the function to the event
                 StartCallbackRead(Utils.NetworkIO.ReadEventCodes.LineRecv); // Enable the callback
@@ -3296,16 +3536,24 @@ namespace NetLib
             /// </summary>
             /// <param name="maxSize">The maximum number of bytes to read</param>
             /// <returns>The array of bytes read from the stream</returns>
-            public new byte[] DirectRead(int maxSize)
+            public byte[] DirectRead(int maxSize)
             {
 #if Validation_soft // Important check
-                if (sslStream == null || client == null || !client.Connected) throw new InvalidOperationException("Cannot read from stream, when client is offline"); // Check if the base client is running
+                if (sslStream == null || !fromServer && (client == null || !client.Connected)) throw new InvalidOperationException("Cannot read from stream, when client is offline"); // Check if the base client is running
 #endif
 #if Validation_hard // Not so important check
-                if (sslStream.CanRead) throw new InvalidOperationException("Cannot read from stream, SSL client can't read"); // Check if the sslStream object can read from the stream
+                if (!sslStream.CanRead) throw new InvalidOperationException("Cannot read from stream, SSL client can't read"); // Check if the sslStream object can read from the stream
 #endif
                 byte[] buffer = new byte[maxSize]; // Define the receive buffer
-                int bytesRead = sslStream.Read(buffer, 0, maxSize); // Read from the stream
+                int bytesRead = 0; // Define read bytes count
+                try
+                {
+                    bytesRead = sslStream.Read(buffer, 0, maxSize); // Read from the stream
+                }
+                catch (System.IO.IOException) // Check for timeouts
+                {
+                    return null; // Return null in case of timeout
+                }
                 byte[] dataBuffer = new byte[bytesRead]; // Define the data buffer
                 Array.Copy(buffer, dataBuffer, bytesRead); // Copy the bytes read to the data buffer
                 augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
@@ -3317,20 +3565,28 @@ namespace NetLib
             /// Read a new line from the stream
             /// </summary>
             /// <returns>The next new line read from the stream</returns>
-            public new string ReadLine()
+            public string ReadLine()
             {
 #if Validation_soft // Important check
-                if (sslStream == null || client == null || !client.Connected) throw new InvalidOperationException("Cannot read from stream, when client is offline"); // Check if the base client is running
+                if (sslStream == null || !fromServer && (client == null || !client.Connected)) throw new InvalidOperationException("Cannot read from stream, when client is offline"); // Check if the base client is running
 #endif
 #if Validation_hard // Not so important check
-                if (sslStream.CanRead) throw new InvalidOperationException("Cannot read from stream, SSL client can't read"); // Check if the sslStream can read
+                if (!sslStream.CanRead) throw new InvalidOperationException("Cannot read from stream, SSL client can't read"); // Check if the sslStream can read
 #endif
                 StringBuilder result = new StringBuilder(); // Define string buffer
 
                 while (true) // Loop infinitely
                 {
                     byte[] buffer = new byte[RecvSize]; // Define the receive buffer
-                    int bytesRead = sslStream.Read(buffer, 0, RecvSize); // Read bytes from the stream
+                    int bytesRead = 0; // Define read bytes count
+                    try
+                    {
+                        bytesRead = sslStream.Read(buffer, 0, RecvSize); // Read bytes from the stream
+                    }
+                    catch (System.IO.IOException) // Timeout happened
+                    {
+                        return null; // Return empty result
+                    }
                     string subResult = RecvEncoder.GetString(buffer, 0, bytesRead); // Convert the bytes read to string
                     result.Append(subResult); // Append the string to the string buffer
                     if (subResult.EndsWith(ReadNewLine)) break; // Stop if a line has ended
@@ -3349,7 +3605,7 @@ namespace NetLib
             /// </summary>
             /// <param name="maxSize">The number of bytes to read from the stream</param>
             /// <returns>The task with the bytes read from the stream</returns>
-            public async new Task<byte[]> DirectReadAsync(int maxSize)
+            public async Task<byte[]> DirectReadAsync(int maxSize)
             {
                 return await Task<byte[]>.Factory.StartNew(() => DirectRead(maxSize)).ConfigureAwait(false); // Wait for the task to complete
             }
@@ -3358,7 +3614,7 @@ namespace NetLib
             /// Read a new line from the stream async
             /// </summary>
             /// <returns>The task with the new line read from the stream</returns>
-            public async new Task<string> ReadLineAsync()
+            public async Task<string> ReadLineAsync()
             {
                 return await Task<string>.Factory.StartNew(() => ReadLine()).ConfigureAwait(false); // Wait for the task to complete
             }
@@ -3367,9 +3623,28 @@ namespace NetLib
             /// Directly write bytes to the stream
             /// </summary>
             /// <param name="buffer">The array of bytes to write</param>
+            public void DirectWrite(byte[] buffer)
+            {
+                DirectWrite(buffer, 0, buffer.Length); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write to the stream</param>
+            /// <param name="offset">The offset to begin writing from</param>
+            public void DirectWrite(byte[] buffer, int offset)
+            {
+                DirectWrite(buffer, offset, buffer.Length - offset); // Write the bytes to the stream
+            }
+
+            /// <summary>
+            /// Directly write bytes to the stream
+            /// </summary>
+            /// <param name="buffer">The array of bytes to write</param>
             /// <param name="offset">The offset to begin writing from</param>
             /// <param name="length">The number of bytes to write</param>
-            public new void DirectWrite(byte[] buffer, int offset, int length)
+            public void DirectWrite(byte[] buffer, int offset, int length)
             {
                 augmentations.ForEach((aug) =>
                 {
@@ -3387,7 +3662,7 @@ namespace NetLib
             /// Write a new line to the stream
             /// </summary>
             /// <param name="data">The line to write out</param>
-            public new void WriteLine(string data)
+            public void WriteLine(string data)
             {
                 augmentations.ForEach((aug) => data = aug.OnBeforeReceiveString(data, SendEncoder)); // Let the augmentations modify the data
                 augmentations.ForEach((aug) => aug.OnAfterReceiveString(data, SendEncoder)); // Let the augmentations inspect the data
@@ -3398,13 +3673,69 @@ namespace NetLib
             /// <summary>
             /// Gracefully stop the client
             /// </summary>
-            public new void GracefulStop()
+            public void GracefulStop()
             {
                 if (clientOffline) return; // Check if the client's running
+                if (sslStream != null)
+                {
+                    sslStream.Close(); // Close the stream
+                    sslStream.Dispose(); // Dispose the stream
+                    sslStream = null; // Reset the steam 
+                }
+                if (!fromServer) augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations if we're not created from server
+                if (clientOffline) return; // Return if the client isn't running
+#if Validation_soft // Important check
+                if (client == null) throw new InvalidOperationException("Cannot close an offline client"); // The client isn't started
+#endif
+
+                client.Shutdown(SocketShutdown.Both); // Shutdown read and write sockets
+                client.Disconnect(false); // Disconnect from the server
+                client.Close(); // Close the client
+                client.Dispose(); // Dispose the client
+                client = null; // Reset the client
+                clientOffline = true; // The client isn't running
+                ClientStopped?.Invoke(); // Invoke the client stopped event
+            }
+
+            /// <summary>
+            /// Install an augmentation to the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to install</param>
+            public void InstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Add(augmentation); // Add the augmentation to the list
+                if (!fromServer) augmentation.OnInstalled(this); // Notify the augmentation of the installation
+            }
+
+            /// <summary>
+            /// Unintall an installed augmentation from the socket
+            /// </summary>
+            /// <param name="augmentation">The augmentation to uninstall</param>
+            public void UninstallAugmentation(Augmentation augmentation)
+            {
+                augmentations.Remove(augmentation); // Remote the augmentation from the list
+                if (!fromServer) augmentation.OnUninstalled(); // Notify the augmentation of the installation
+            }
+
+            /// <summary>
+            /// Get the underlying network stream of the client socket
+            /// </summary>
+            /// <returns>The network stream of the client socket</returns>
+            public NetworkStream GetRawStream()
+            {
+                if (client == null || !client.Connected) return null; // Check if the client is started
+                return new NetworkStream(client); // Return the network stream
+            }
+
+            /// <summary>
+            /// Close the stream of the client, but leave the connection open
+            /// </summary>
+            public void CloseStream()
+            {
+                sslStream.ShutdownAsync().Wait(); // Shutdown the ssl stream (graceful)
                 sslStream.Close(); // Close the stream
-                sslStream.Dispose(); // Dispose the stream
-                sslStream = null; // Reset the steam
-                base.GracefulStop(); // Call stop on the base client
+                sslStream.Dispose(); // Release resources
+                sslStream = null; // Relese reference
             }
         }
 
@@ -3446,13 +3777,21 @@ namespace NetLib
             /// </summary>
             public string ServerInformation { get; internal set; } = "";
             /// <summary>
-            /// Buffer for collection data channel bytes
-            /// </summary>
-            private byte[] pasvBuffer;
-            /// <summary>
             /// The socket of the data channel
             /// </summary>
             private INetworkSocket dataSocket;
+            /// <summary>
+            /// The client interface of the client
+            /// </summary>
+            private INetworkClient netClient;
+            /// <summary>
+            /// Control the outputting of debug messages
+            /// </summary>
+            public bool DebugMode { get; set; } = false;
+            /// <summary>
+            /// The hostname of the server to validate TLS with
+            /// </summary>
+            private string serverHostname = "";
 
             /// <summary>
             /// Create a new FTP client
@@ -3470,6 +3809,28 @@ namespace NetLib
             public void CheckCertificateValidity(bool check)
             {
                 checkSSL = check; // Set the validation flag
+                if (!checkSSL) // If we ignore certificate warnings
+                {
+                    //Define a new callback for validation
+                    ServicePointManager.ServerCertificateValidationCallback = new System.Net.Security.RemoteCertificateValidationCallback((sender, cert, chain, errors) =>
+                    {
+                        return true; // Return true, without any validation
+                    });
+                }
+            }
+
+            /// <summary>
+            /// Disconnect from the current ftp server
+            /// </summary>
+            public void Disconnect()
+            {
+                if (write == null) throw new InvalidOperationException("Can't disconnect from server, when you're not even connected to it");
+                string disconnect = (new Utils.FTP.Request() { command = "QUIT", arguments = "" }).ToString(); // Get the command to send
+                write.WriteLine(disconnect); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ClosingControlConnection) throw new System.Security.SecurityException("Server failed to close control channel connection"); // Throw if unexpected status code
+                netClient.CloseStream(); // Close the stream
+                socket.ForceStop(); // Close the socket
             }
 
             /// <summary>
@@ -3500,57 +3861,428 @@ namespace NetLib
             /// <param name="password">The password to login to the FTP server with</param>
             public void Connect(string hostname, int port, string username, string password)
             {
-                if (ssl) // Use SSL
-                {
-                    SSLClient client = new SSLClient(Utils.IPv4.CreateEndPoint(hostname, port), checkSSL); // Create a new ssl client
-                    // Set the new line endings
-                    client.ReadNewLine = "\r\n";
-                    client.WriteNewLine = "\r\n";
-                    client.Start(); // Connect to the server
-                    // Set the sockets
-                    write = client as INetworkWriter;
-                    read = client as INetworkReader;
-                    socket = client as INetworkSocket;
-                }
-                else
-                {
-                    TcpClient client = new TcpClient(Utils.IPv4.CreateEndPoint(hostname, port)); // Create a new tcp client
-                    // Set the nwe line endings
-                    client.ReadNewLine = "\r\n";
-                    client.WriteNewLine = "\r\n";
-                    client.Start(); // Connect to the server
-                    // Set the sockets
-                    write = client as INetworkWriter;
-                    read = client as INetworkReader;
-                    socket = client as INetworkSocket;
-                }
+                serverHostname = hostname;
+                TcpClient client = new TcpClient(Utils.IPv4.CreateEndPoint(hostname, port)); // Create a new tcp client
+                // Set the new line endings
+                client.ReadNewLine = "\r\n";
+                client.WriteNewLine = "\r\n";
+                client.Start(); // Connect to the server
+                // Set the sockets
+                write = client as INetworkWriter;
+                read = client as INetworkReader;
+                socket = client as INetworkSocket;
+                netClient = client as INetworkClient;
 
                 GetServer(); // Get the message of the server
+                if (ssl) BeginTLS();
                 Login(username, password); // Login to the server
                 SetType(); // Set the transfer type
                 Pwd(); // Get the current working directory
             }
 
             /// <summary>
-            /// Connect to the data channel on the FTP server
+            /// Download and save a file from the ftp server
             /// </summary>
-            private void ConnectDataPort()
+            /// <param name="remoteFile">The name of the remote file to download</param>
+            /// <param name="localFile">The path to save the file to (directory)</param>
+            public void DownloadFile(string remoteFile, string localFile)
             {
-                Tuple<string, int> result = GetDataPort(); // Get the ip and port to connect to
-                TcpClient ftpData = new TcpClient(Utils.IPv4.CreateEndPoint(result.Item1, result.Item2)); // Create a new tcp client
-                ftpData.Start(); // Connect to the server
-                dataSocket = ftpData as INetworkSocket; // Get the data channel socket
-                pasvBuffer = new byte[0]; // Init the receive buffer
+                string newName = localFile + "\\" + remoteFile; // Get the new path of the local file
+                byte[] data = DownloadFile(remoteFile); // Download the file
+                System.IO.File.WriteAllBytes(newName, data); // Write the file to disk
+            }
 
-                ftpData.AddEventDataReceived((data) => // When new data received
+            /// <summary>
+            /// Download a file from the ftp server
+            /// </summary>
+            /// <param name="remoteFile">The name of the remote file to download</param>
+            /// <returns>The contents of the file</returns>
+            public byte[] DownloadFile(string remoteFile)
+            {
+                if (ssl) return DownloadSSL(remoteFile); // Download over TLS
+                else return Download(remoteFile); // Downlod over insecure connection
+            }
+
+            /// <summary>
+            /// Download a file when using normal ftp connection
+            /// </summary>
+            /// <param name="remoteFile">The remote file to download</param>
+            /// <returns>The contents of the remote file</returns>
+            private byte[] Download(string remoteFile)
+            {
+                Debug("[DWL]: Starting download procedure");
+                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                string downloadFile = (new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }).ToString(); // Get the command to send
+                write.WriteLine(downloadFile); // Send the command
+                Debug($"[CMD]: {downloadFile}");
+                Tuple<INetworkReader, INetworkWriter, INetworkClient> sockets = ConnectDataPort(dataPort, false); // Connect to the data channel
+                INetworkReader _read = sockets.Item1; // Get the read socket
+                INetworkClient _client = sockets.Item3; // Get the client interface
+                _client.ReadTimeout = 1000; // Set a basic read timeout to know when the data is fully received
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
+                byte[] result = new byte[0]; // Define the result
+                while (true)
                 {
-                    int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
-                    byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
-                    Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
-                    pasvBuffer = new byte[newLength]; // Create a new buffer
-                    Array.Copy(tmp, pasvBuffer, tmp.Length); // Copy the previous buffer
-                    Array.ConstrainedCopy(data, 0, pasvBuffer, tmp.Length, data.Length); // Copy the received data
-                });
+                    byte[] data = _read.DirectRead(2048); // Read from the client
+                    if (data == null || data.Length == 0) break; // Check if no more data, then break
+                    int newLength = result.Length + data.Length; // Get the new length of the buffer
+                    byte[] tmp = new byte[result.Length]; // Init a temporary save buffer
+                    Array.Copy(result, tmp, result.Length); // Save the current buffer
+                    result = new byte[newLength]; // Create a new buffer
+                    Array.Copy(tmp, result, tmp.Length); // Copy the previous buffer
+                    Array.ConstrainedCopy(data, 0, result, tmp.Length, data.Length); // Copy the received data
+                }
+                _client.CloseStream(); // Close the ssl stream
+                dataSocket.ForceStop(); // Stop the ssl client
+                Debug("[DWL]: File bytes read from server");
+                resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
+                Debug("[DWL]: Download finished");
+                return result;
+            }
+
+            /// <summary>
+            /// Download a file when using SSL ftp connection
+            /// </summary>
+            /// <param name="remoteFile">The remote file to download</param>
+            /// <returns>The contents of the remote file</returns>
+            private byte[] DownloadSSL(string remoteFile)
+            {
+                Debug("[DWL]: Starting download procedure");
+                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                INetworkClient _client = ConnectDataPort(dataPort, false).Item3; // Connect to the data channel
+                string downloadFile = (new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }).ToString(); // Get the command to send
+                write.WriteLine(downloadFile); // Send the command
+                Debug($"[CMD]: {downloadFile}");
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
+                System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
+                sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
+                SSLClient client = new SSLClient(sslStream); // Wrap the ssl stream in the ssl client
+                client.ReadTimeout = 1000; // Set a basic read timeout to know when the data is fully received
+                byte[] result = new byte[0]; // Define the result
+                while (true)
+                {
+                    byte[] data = client.DirectRead(2048); // Read from the client
+                    if (data == null) break; // Check if no more data, then break
+                    int newLength = result.Length + data.Length; // Get the new length of the buffer
+                    byte[] tmp = new byte[result.Length]; // Init a temporary save buffer
+                    Array.Copy(result, tmp, result.Length); // Save the current buffer
+                    result = new byte[newLength]; // Create a new buffer
+                    Array.Copy(tmp, result, tmp.Length); // Copy the previous buffer
+                    Array.ConstrainedCopy(data, 0, result, tmp.Length, data.Length); // Copy the received data
+                }
+                client.CloseStream(); // Close the ssl stream
+                client.ForceStop(); // Stop the ssl client
+                dataSocket.ForceStop(); // Stop the tcp client
+                Debug("[DWL]: File bytes read from server");
+                resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
+                Debug("[DWL]: Download finished");
+                return result;
+            }
+
+            /// <summary>
+            /// Upload a file to the ftp server
+            /// </summary>
+            /// <param name="filePath">The path of the file to upload</param>
+            public void UploadFile(string filePath)
+            {
+                Debug("[UPL]: Initiating file upload");
+                string name = (new System.IO.FileInfo(filePath)).Name; // Get the name of the file
+                byte[] content = System.IO.File.ReadAllBytes(filePath); // Get the byte content of the file
+                Debug("[UPL]: File loaded into memory");
+                UploadFile(name, content); // Upload the file to the server
+            }
+
+            /// <summary>
+            /// Upload a file to the ftp server
+            /// </summary>
+            /// <param name="fileName">The name of the file to be uploaded</param>
+            /// <param name="fileBytes">The content of the file</param>
+            public void UploadFile(string fileName, byte[] fileBytes)
+            {
+                if (ssl) UploadSSL(fileName, fileBytes); // Upload over TLS
+                else Upload(fileName, fileBytes); // Upload over insecure connection
+            }
+
+            /// <summary>
+            /// Upload a file when using normal ftp connection
+            /// </summary>
+            /// <param name="fileName">The name of the file to be uploaded</param>
+            /// <param name="fileBytes">The content of the file</param>
+            private void Upload(string fileName, byte[] fileBytes)
+            {
+                Debug("[UPL]: Starting upload procedure");
+                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                string uploadFile = (new Utils.FTP.Request() { command = "STOR", arguments = fileName }).ToString(); // Get the command to send
+                write.WriteLine(uploadFile); // Send the command
+                Debug($"[CMD]: {uploadFile}");
+                INetworkWriter _write = ConnectDataPort(dataPort, ssl).Item2; // Get the write socket of the data channel
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
+                _write.DirectWrite(fileBytes, 0, fileBytes.Length);
+                dataSocket.ForceStop();
+                Debug("[UPL]: File bytes sent to server");
+                resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
+                Debug("[UPL]: Upload finished");
+            }
+
+            /// <summary>
+            /// Upload a file when using SSL ftp
+            /// </summary>
+            /// <param name="fileName">The name of the file to be uploaded</param>
+            /// <param name="fileBytes">The content of the file</param>
+            private void UploadSSL(string fileName, byte[] fileBytes)
+            {
+                Debug("[UPL]: Starting upload procedure");
+                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                INetworkClient _client = ConnectDataPort(dataPort, false).Item3; // Connect to the data channel
+                string uploadFile = (new Utils.FTP.Request() { command = "STOR", arguments = fileName }).ToString(); // Get the command to send
+                write.WriteLine(uploadFile); // Send the command
+                Debug($"[CMD]: {uploadFile}");
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
+                System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
+                sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
+                SSLClient client = new SSLClient(sslStream); // Wrap the ssl stream in the ssl client
+                client.DirectWrite(fileBytes); // Write the file to the stream
+                client.CloseStream(); // Close the ssl stream
+                client.ForceStop(); // Stop the ssl client
+                dataSocket.ForceStop(); // Stop the tcp client
+                Debug("[UPL]: File bytes sent to server");
+                resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
+                Debug("[UPL]: Upload finished");
+            }
+
+            /// <summary>
+            /// Move a file from the current folder
+            /// </summary>
+            /// <param name="fileToMove">The file to move (with extension)</param>
+            /// <param name="targetDirectory">The directory to move the file to (specify full path!)</param>
+            public void MoveFile(string fileToMove, string targetDirectory)
+            {
+                string t = targetDirectory;
+                if (t[t.Length - 1] == '/') t += fileToMove; // Check if the targetDirectory has an ending slash
+                else t += "/" + fileToMove; // Add the ending slash
+                RenameFile(fileToMove, t); // Rename the file to move it
+            }
+
+            /// <summary>
+            /// Rename a file in the current directory
+            /// </summary>
+            /// <param name="fileToRename">The name of the file to rename (with extension)</param>
+            /// <param name="newName">The new name of the file (with extension)</param>
+            public void RenameFile(string fileToRename, string newName)
+            {
+                string renameFrom = (new Utils.FTP.Request() { command = "RNFR", arguments = fileToRename }).ToString(); // Get the command to send
+                write.WriteLine(renameFrom); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ActionPending) throw new System.Security.SecurityException("Failed to init rename function"); // Throw if unexpected status code
+                string renameTo = (new Utils.FTP.Request() { command = "RNTO", arguments = newName }).ToString(); // Get the command to send
+                write.WriteLine(renameTo); // Send the command
+                resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to rename the file"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// Remove a directory from the remote server
+            /// </summary>
+            /// <param name="directoryName">The name of the directory to remove</param>
+            public void DeleteDirectory(string directoryName)
+            {
+                string pwd = Pwd(); // Get the current working directory
+                string fullPath = pwd + "/" + directoryName; // Get the full path of the specified directory
+                Dictionary<string, string> rmfList = BuildRemoveFileList(fullPath); // Build the list of files to remove from the directory
+                RemoveFileList(rmfList); // Remove the files from the directory and the directory itself
+            }
+
+            /// <summary>
+            /// Go to the parent directory
+            /// </summary>
+            public void CdUp()
+            {
+                string oneUp = (new Utils.FTP.Request() { command = "CDUP", arguments = "" }).ToString(); // Get the command to send
+                write.WriteLine(oneUp); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// Remove files based on the special list format
+            /// </summary>
+            /// <param name="list">The list of files to remove</param>
+            private void RemoveFileList(Dictionary<string, string> list)
+            {
+                foreach (KeyValuePair<string, string> kvp in list) // Go through the files
+                {
+                    string[] files = kvp.Value.Split('/'); // Get each file one by one
+                    if (files.Length == 0) continue; // Check if there are files in this folder
+                    Cwd(kvp.Key); // Go to the target folder
+                    foreach (string file in files) // Go through the folder's files
+                    {
+                        if (file == "") continue; // Skip non existent files
+                        DeleteFile(file); // Remove the file from the folder
+                    }
+
+                    CdUp(); // Go to the parent folder
+                    RemoveDirectory(kvp.Key); // Remove the folder
+                }
+            }
+
+            /// <summary>
+            /// Create a file remove list from a parent directory
+            /// </summary>
+            /// <param name="parentDir">The full path of the parent directory</param>
+            /// <returns>The file list to remove</returns>
+            private Dictionary<string, string> BuildRemoveFileList(string parentDir)
+            {
+                if (parentDir == "/") throw new AccessViolationException("You can't delete the ftp root folder!"); // Check if someone's nasty
+                Dictionary<string, string> result = new Dictionary<string, string>(); // Define the result
+                Utils.FTP.File[] subFiles = ListDirectory(parentDir); // Get the files in the parent directory
+                string files = ""; // Define the files concat string
+
+                foreach (Utils.FTP.File file in subFiles) // Loop through the files
+                {
+                    if (file.isDirectory) // Directory
+                    {
+                        Dictionary<string, string> subResult = BuildRemoveFileList(parentDir + "/" + file.fileName); // Get the directory's files
+                        result.Merge(subResult); // Merge the result with the result dictionary
+                    }
+                    else files += file.fileName + "/"; // Append the file to the files list
+                }
+
+                if (files.Length > 0) files = files.Substring(0, files.Length - 1); // Remove the ending slash
+                result.Add(parentDir, files); // Add the files to the result
+
+                return result; // Return the result
+            }
+
+            /// <summary>
+            /// Remove a directory from the ftp server
+            /// </summary>
+            /// <param name="directoryName">The name of the directory to remove</param>
+            private void RemoveDirectory(string directoryName)
+            {
+                string deleteDirectory = (new Utils.FTP.Request() { command = "RMD", arguments = directoryName }).ToString(); // Get the command to send
+                write.WriteLine(deleteDirectory); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// Remove a file from the current folder
+            /// </summary>
+            /// <param name="fileName">The name of the file to remove</param>
+            public void DeleteFile(string fileName)
+            {
+                string deleteFile = (new Utils.FTP.Request() { command = "DELE", arguments = fileName }).ToString(); // Get the command to send
+                write.WriteLine(deleteFile); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// Create a new directory in the current folder
+            /// </summary>
+            /// <param name="directoryName">The name of the new directory</param>
+            public void CreateNewDirectory(string directoryName)
+            {
+                string createDir = (new Utils.FTP.Request() { command = "MKD", arguments = directoryName }).ToString(); // Get the command to send
+                write.WriteLine(createDir); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+            }
+
+            /// <summary>
+            /// Secure the data channel of a TLS session
+            /// </summary>
+            private void SetupSecureDataChannel()
+            {
+                string setPBSZ = (new Utils.FTP.Request() { command = "PBSZ", arguments = "0" }).ToString(); // Get the command to send
+                write.WriteLine(setPBSZ); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new System.Security.SecurityException("Failed to set the protection buffer size"); // Throw if unexpected status code
+                string setProtection = (new Utils.FTP.Request() { command = "PROT", arguments = "P" }).ToString(); // Get the command to send
+                write.WriteLine(setProtection); // Send the command
+                resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new System.Security.SecurityException("Failed to set the protection level of the data channel"); // Throw if unexpected status code
+                Debug("[TLS]: Data channel secured");
+            }
+
+            /// <summary>
+            /// Output ftp debug messages
+            /// </summary>
+            /// <param name="msg">The message to print to stdout</param>
+            internal void Debug(string msg)
+            {
+                if (DebugMode) Console.WriteLine(msg); // if debugging enabled write out the message
+            }
+
+            /// <summary>
+            /// Upgrade the current connection to TLS
+            /// </summary>
+            private void BeginTLS()
+            {
+                string authTls = (new Utils.FTP.Request() { command = "AUTH", arguments = "TLS" }).ToString(); // Get the command to send
+                write.WriteLine(authTls); // Send the command
+                Utils.FTP.Response resp = GetResponse(); // Get the response
+                if (resp.statusCode != Utils.FTP.StatusCode.AuthContinue) throw new System.Security.SecurityException("Server failed to init the TLS connection"); // Throw if unexpected status code
+                System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(netClient.GetRawStream()); // Create the ssl stream from the client
+                sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
+                SSLClient secureClient = new SSLClient(sslStream);
+                // Set the new line endings
+                secureClient.ReadNewLine = "\r\n";
+                secureClient.WriteNewLine = "\r\n";
+                // Set the sockets
+                write = secureClient as INetworkWriter;
+                read = secureClient as INetworkReader;
+                socket = secureClient as INetworkSocket;
+                netClient = secureClient as INetworkClient;
+                Debug("[TLS]: Connection established");
+                SetupSecureDataChannel(); // Setup the secure data channel
+            }
+
+            /// <summary>
+            /// Connect to the data channel on the FTP server
+            /// <param name="result">The result of the getDataPort function</param>
+            /// <param name="useSSL">True to create and secure the socket automatically, otherwise false</param>
+            /// </summary>
+            private Tuple<INetworkReader, INetworkWriter, INetworkClient> ConnectDataPort(Tuple<string, int> result, bool useSSL)
+            {
+                Debug("[PASV Handler]: Initiating PASV connection");
+                // Define the network sockets
+                INetworkReader _read = null;
+                INetworkWriter _write = null;
+                INetworkClient _client = null;
+
+                if (!useSSL)
+                {
+                    TcpClient ftpData = new TcpClient(Utils.IPv4.CreateEndPoint(result.Item1, result.Item2)); // Create a new tcp client
+                    ftpData.Start(); // Connect to the server
+                    dataSocket = ftpData as INetworkSocket; // Get the data channel socket
+                    _read = ftpData as INetworkReader; // Get the read socket from the client
+                    _write = ftpData as INetworkWriter; // Get the write socket from the client
+                    _client = ftpData as INetworkClient; // Get the client interface
+                }
+                else
+                {
+                    SSLClient ftpData = new SSLClient(Utils.IPv4.CreateEndPoint(result.Item1, result.Item2), !checkSSL); // Create a new ssl client
+                    ftpData.SetServerDestination(serverHostname);
+                    ftpData.Start(); // Connect to the server
+                    dataSocket = ftpData as INetworkSocket; // Get the data channel socket
+                    _read = ftpData as INetworkReader; // Get the read socket from the client
+                    _write = ftpData as INetworkWriter; // Get the write socket from the client
+                    _client = ftpData as INetworkClient; // Get the client interface
+                    Debug("TLS client connected to the data channel");
+                }
+
+                Debug("[PASV Handler]: PASV channel connected");
+
+                return new Tuple<INetworkReader, INetworkWriter, INetworkClient>(_read, _write, _client); // Return the result
             }
 
             /// <summary>
@@ -3563,6 +4295,7 @@ namespace NetLib
                 write.WriteLine(getDataPort); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Wait for response
                 if (resp.statusCode != Utils.FTP.StatusCode.EnterPasvMode) throw new Exception("Failed to start entering to passive mode"); // Throw an exception if unexpected status code
+                Debug("[PASV Handler]: Got PASV destination");
                 return Utils.FTP.GetPasvDestination(resp.message); // Return the parsed data
             }
 
@@ -3581,28 +4314,63 @@ namespace NetLib
             /// <summary>
             /// List a directory's children
             /// </summary>
-            /// <param name="directory">The directory to list the children of</param>
+            /// <param name="directory">The directory to list the children of (full path required, leave empty to list current directory)</param>
             /// <returns>A list of files inside the directory</returns>
             public Utils.FTP.File[] ListDirectory(string directory)
             {
-                ConnectDataPort(); // Begin pasv connection
-                ListFiles(); // Send the file list command (blocking call until file listing finishes)
-                dataSocket.ForceStop(); // Kill the data channel
+                if (directory != "") Cwd(directory);
+                Tuple<string, int> dataPort = GetDataPort();
+                byte[] pasvBuffer = new byte[0];
+                if (!ssl)
+                {
+                    INetworkReader _read = ConnectDataPort(dataPort, ssl).Item1;
+                    _read.AddEventDataReceived((data) => // When new data received
+                    {
+                        Debug("Data read from the data channel");
+                        int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
+                        byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
+                        Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
+                        pasvBuffer = new byte[newLength]; // Create a new buffer
+                        Array.Copy(tmp, pasvBuffer, tmp.Length); // Copy the previous buffer
+                        Array.ConstrainedCopy(data, 0, pasvBuffer, tmp.Length, data.Length); // Copy the received data
+                    });
+                }
+
+                byte[] _tmp = ListFiles(dataPort); // Send the file list command (blocking call until file listing finishes)
+                if (!ssl) dataSocket.ForceStop(); // Kill the data channel
+                else pasvBuffer = _tmp;
                 string result = socket.RecvEncoder.GetString(pasvBuffer); // Get the string result of the data buffer
                 return Utils.FTP.ParseFileList(result); // Return the file list
             }
-            
+
             /// <summary>
             /// Send the file list command to the server
             /// </summary>
-            private void ListFiles()
+            private byte[] ListFiles(Tuple<string, int> dPort)
             {
                 string listDirectory = (new Utils.FTP.Request() { command = "LIST", arguments = "" }).ToString(); // Get the list command
                 write.WriteLine(listDirectory); // Send the command to the server
+                byte[] pasvBuffer = new byte[0]; // Define the result buffer
+                if (ssl)
+                {
+                    INetworkReader _read = ConnectDataPort(dPort, ssl).Item1; // Connect to the data port
+                    _read.AddEventDataReceived((data) => // When new data received
+                    {
+                        int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
+                        byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
+                        Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
+                        pasvBuffer = new byte[newLength]; // Create a new buffer
+                        Array.Copy(tmp, pasvBuffer, tmp.Length); // Copy the previous buffer
+                        Array.ConstrainedCopy(data, 0, pasvBuffer, tmp.Length, data.Length); // Copy the received data
+                        dataSocket.ForceStop();
+                    });
+                }
+
                 Utils.FTP.Response resp = GetResponse(); // Get the response
-                if (resp.statusCode != Utils.FTP.StatusCode.ReceiveFtpData) throw new Exception("Failed to start the listing of the requested directory"); // Throw if unexpected status code
+                if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new Exception("Failed to start the listing of the requested directory"); // Throw if unexpected status code
                 resp = GetResponse(); // Get the next response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new Exception("Failed to get the file list of the directory"); // Throw if unexpected status code
+                return pasvBuffer; // Return the result
             }
 
             /// <summary>
@@ -3613,9 +4381,22 @@ namespace NetLib
             {
                 string result = read.ReadLineAsync().Result; // Get the next line from the server
                 Utils.FTP.Response r = result.ToResponse(); // Parse the response
+                Debug($"[RES]: ({(int)r.statusCode}) {r.message}");
                 if (r.statusCode == Utils.FTP.StatusCode.Timeout) // Check if we're timed out
                 {
                     throw new TimeoutException("The server dropped the connection due to too much inactive time"); // Throw an exception if we're timed out
+                }
+                else if (r.statusCode == Utils.FTP.StatusCode.AccessFailed) // Check if the current action failed
+                {
+                    throw new InvalidOperationException("The current action failed to complete, probably unexistent file parameter or lack of permissions to complete the action"); // Throw an exception on failed actions
+                }
+                else if (r.statusCode == Utils.FTP.StatusCode.AccessDenied) // Check if the current action resulted in access denied
+                {
+                    throw new AccessViolationException("The current action resulted in denial of access, probably insufficient file permissions"); // Throw an exception on access denials
+                }
+                else if (r.statusCode == Utils.FTP.StatusCode.LoginFailure)
+                {
+                    throw new AccessViolationException($"General login failure, here's the message of the server: {r.message}"); // Throw an exception on access denials
                 }
                 return r; // Return the response of the server
             }
@@ -3636,7 +4417,7 @@ namespace NetLib
             /// Change the current working directory
             /// </summary>
             /// <param name="targetDirectory">The directory to change to</param>
-            private void Cwd(string targetDirectory)
+            public void Cwd(string targetDirectory)
             {
                 string setWorkingDirectory = (new Utils.FTP.Request() { command = "CWD", arguments = targetDirectory }).ToString(); // Get the command to send
                 write.WriteLine(setWorkingDirectory); // Send the command
@@ -3655,9 +4436,10 @@ namespace NetLib
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new Exception("Failed to get the current working directory"); // Check if the status code is positive
                 // Format and return the current path
-                string wdir = resp.message.Substring(1);
-                wdir = wdir.Substring(0, wdir.Length - 1);
-                return wdir;
+                int start = resp.message.IndexOf('\"') + 1; // Get the start of the substring
+                int end = resp.message.LastIndexOf('\"'); // Get the end of the substring
+                string wdir = resp.message.Substring(start, resp.message.Length - start - (resp.message.Length - end)); // Get the ip and the port string from the response
+                return wdir; // Return the current working directory
             }
 
             /// <summary>
@@ -3764,7 +4546,7 @@ namespace NetLib
                 {
                     currentPID = System.Diagnostics.Process.GetCurrentProcess().Id; // Get the current PID
                 }
-                
+
                 int randomInteger = randomIncrementor + milliSeconds + currentPID; // Add the random values together
                 string randomValue = randomInteger.ToString("X"); // Convert them to a hex string
                 randomIncrementor++; // Increment the incrementor
@@ -4031,11 +4813,39 @@ namespace NetLib
                 /// <summary>
                 /// You're about to receive data on the data channel
                 /// </summary>
-                ReceiveFtpData = 150,
+                DataChannelReady = 150,
                 /// <summary>
                 /// Closing the data channel with successful transfer
                 /// </summary>
-                CloseFtpDataSuccess = 226
+                CloseFtpDataSuccess = 226,
+                /// <summary>
+                /// Authentication accepted, continue with authenticating
+                /// </summary>
+                AuthContinue = 234,
+                /// <summary>
+                /// Error, data channel insecure data
+                /// </summary>
+                InsecureDataChannel = 522,
+                /// <summary>
+                /// Failed to complete an action because we failed to access a file
+                /// </summary>
+                AccessFailed = 550,
+                /// <summary>
+                /// A requested action is pending, needs more data
+                /// </summary>
+                ActionPending = 350,
+                /// <summary>
+                /// Error, general access denied
+                /// </summary>
+                AccessDenied = 533,
+                /// <summary>
+                /// Server closes the control channel
+                /// </summary>
+                ClosingControlConnection = 221,
+                /// <summary>
+                /// General login failure
+                /// </summary>
+                LoginFailure = 530
             }
 
             /// <summary>
@@ -4103,7 +4913,7 @@ namespace NetLib
                             }
                             permissions += current; // Add the current char to the permission string
                         }
-                        
+
                         if (pDone && !cDone) // Permissions parsed, number of children not
                         {
                             if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
@@ -4128,7 +4938,7 @@ namespace NetLib
                         {
                             if (char.IsWhiteSpace(current)) // Check if the current char is a whitespace
                             {
-                                if(gid.Length > 0) gDone = true; // Group id parsed if data is present
+                                if (gid.Length > 0) gDone = true; // Group id parsed if data is present
                                 continue; // Skip the whitespace
                             }
                             gid += current; // Add the current char to the group id string
