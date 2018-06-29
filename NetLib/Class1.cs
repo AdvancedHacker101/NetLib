@@ -20,15 +20,26 @@ namespace NetLib
     public static class Extensions
     {
         /// <summary>
+        /// Remove the last characters of a string
+        /// </summary>
+        /// <param name="value">The string to work with</param>
+        /// <param name="numberOfCharacters">The number of characters to remove from the end</param>
+        /// <returns>The resulting string</returns>
+        public static string RemoveLast(this string value, int numberOfCharacters)
+        {
+            return value.Substring(0, value.Length - numberOfCharacters); // Cut the end of the string
+        }
+
+        /// <summary>
         /// Combine two string only dictionaries
         /// </summary>
         /// <param name="target">The dictionary to copy the values to</param>
         /// <param name="source">The dictionary to copy the values from</param>
         public static void Merge(this Dictionary<string, string> target, Dictionary<string, string> source)
         {
-            foreach (KeyValuePair<string, string> kvp in source)
+            foreach (KeyValuePair<string, string> kvp in source) // Go through the key value pairs in the source dictionary
             {
-                target.Add(kvp.Key, kvp.Value);
+                target.Add(kvp.Key, kvp.Value); // Add them to the target dictionary
             }
         }
 
@@ -41,7 +52,7 @@ namespace NetLib
         {
             int sCode = data.Substring(0, 3).ToInt(); // Get the status code of the response
             string msg = data.Substring(4); // Get the message of the response
-            msg = msg.Substring(0, msg.Length - 2); // Remove the new line from the message
+            msg = msg.RemoveLast(2); // Remove the new line from the message
             return new Utils.FTP.Response() // Construct the response
             {
                 statusCode = (Utils.FTP.StatusCode)sCode, // Set the status code
@@ -113,10 +124,10 @@ namespace NetLib
             /// <param name="offset">The offset to start sending the bytes from</param>
             /// <param name="length">The number of bytes to send</param>
             /// <returns>The bytes to send (default: no changes)</returns>
-            public virtual Tuple<byte[], int, int> OnBeforeSendBytes(byte[] data, int offset, int length)
+            public virtual (byte[] data, int offset, int length) OnBeforeSendBytes(byte[] data, int offset, int length)
             {
                 if (!disableConsole) Console.WriteLine("Before sending bytes");
-                return new Tuple<byte[], int, int>(data, offset, length);
+                return (data, offset, length);
             }
 
             /// <summary>
@@ -878,7 +889,7 @@ namespace NetLib
             /// <summary>
             /// A list of users connected to the server
             /// </summary>
-            private List<Tuple<string, string>> users = new List<Tuple<string, string>>();
+            private List<(string ID, string Name)> users = new List<(string, string)>();
             /// <summary>
             /// Event listener for when failed to send a direct message
             /// </summary>
@@ -943,15 +954,20 @@ namespace NetLib
             /// <returns>True if the client has a username otherwise false</returns>
             private bool IsUsernameSet(string clientID)
             {
-                Tuple<string, string> result = users.Find((user) => clientID == user.Item1); // Search for the client
-                return result != null; // Return the result
+                var (ID, clientName) = users.Find((user) => clientID == user.ID); // Search for the client
+                return ID != null && clientName != null; // Return the result
             }
 
-            private string GetUsername(string clientID)
+            /// <summary>
+            /// Get the username of a client
+            /// </summary>
+            /// <param name="cID">The ID of the client to get the username of</param>
+            /// <returns>The username of the client</returns>
+            private string GetUsername(string cID)
             {
-                Tuple<string, string> result = users.Find((user) => clientID == user.Item1); // Search for the client
-                if (result == null) return null; // Check if the resul's null
-                return result.Item2; // Return the name of the client
+                var (clientID, clientName) = users.Find((user) => cID == user.ID); // Search for the client
+                if (clientID == null || clientName == null) return null; // Check if the resul's null
+                return clientName; // Return the name of the client
             }
 
             /// <summary>
@@ -961,9 +977,9 @@ namespace NetLib
             /// <returns>True if the username isn't available, otherwise false</returns>
             private bool UsernameTaken(string username)
             {
-                foreach (Tuple<string, string> clientData in users) // Loop through the registered users
+                foreach (var (clientID, clientName) in users) // Loop through the registered users
                 {
-                    if (clientData.Item2 == username) return true; // Return true if the username's found
+                    if (clientName == username) return true; // Return true if the username's found
                 }
 
                 return false; // Return false, if the username isn't found
@@ -979,10 +995,9 @@ namespace NetLib
             /// <returns>True if message sent, otherwise false</returns>
             private bool SendTo(string user, string message, ByteIntegrity server, string sender)
             {
-                Tuple<string, string> result = users.Find((u) => user == u.Item2); // Find the target user
-                if (result == null) return false; // Return false if user not found
-                string id = result.Item1; // Get the clientID of the user
-                server.SendData(id, $"{sender}{messageHeaderSeparator}{message}"); // Send the message to the user
+                var (clientID, clientName) = users.Find((u) => user == u.Name); // Find the target user
+                if (clientID == null || clientName == null) return false; // Return false if user not found
+                server.SendData(clientID, $"{sender}{messageHeaderSeparator}{message}"); // Send the message to the user
                 return true; // Return true, successful message sending
             }
 
@@ -994,14 +1009,15 @@ namespace NetLib
             /// <param name="server">The server instance to send the messag with</param>
             private void Broadcast(string sender, string message, ByteIntegrity server)
             {
-                List<Tuple<string, string>> toRemove = new List<Tuple<string, string>>(); // Define a list of client to remove
+                List<(string, string)> toRemove = new List<(string, string)>(); // Define a list of client to remove
 
-                foreach (Tuple<string, string> clientData in users) // Loop through the users
+                foreach (ValueTuple<string, string> clientData in users) // Loop through the users
                 {
-                    if (clientData.Item2 == sender) continue; // Don't send the message if the user is the sender
+                    var (clientID, clientName) = clientData;
+                    if (clientName == sender) continue; // Don't send the message if the user is the sender
                     try
                     {
-                        server.SendData(clientData.Item1, $"{sender}{messageHeaderSeparator}{message}"); // Send the message to the current user
+                        server.SendData(clientID, $"{sender}{messageHeaderSeparator}{message}"); // Send the message to the current user
                     }
                     catch (InvalidOperationException ex) // Current user disconnected
                     {
@@ -1040,7 +1056,7 @@ namespace NetLib
                                 bi.SendData(clientID, $"userfailed{messageHeaderSeparator}{name}"); // Notify the client
                                 return; // Return
                             }
-                            users.Add(new Tuple<string, string>(id, name)); // Add the user to the user list
+                            users.Add((id, name)); // Add the user to the user list
                         }
                         else if (message.StartsWith($"dm{messageHeaderSeparator}")) // Send direct message
                         {
@@ -1159,15 +1175,15 @@ namespace NetLib
             /// <summary>
             /// The socket of the server
             /// </summary>
-            protected Socket serverSocket;
+            private Socket serverSocket;
             /// <summary>
             /// The connected client's socket
             /// </summary>
-            protected Clients.TcpClient client;
+            private Clients.TcpClient client;
             /// <summary>
             /// The endpoint to run the server on
             /// </summary>
-            protected IPEndPoint serverEndPoint;
+            private IPEndPoint serverEndPoint;
             /// <summary>
             /// The size of the buffer to receive from the client
             /// </summary>
@@ -1191,23 +1207,23 @@ namespace NetLib
             /// <summary>
             /// Indicates if the server's running
             /// </summary>
-            protected bool serverOffline = true;
+            private bool serverOffline = true;
             /// <summary>
             /// Indicates if the server should restart after the current client closes
             /// </summary>
-            protected bool restartReading;
+            private bool restartReading;
             /// <summary>
             /// Event listener for client disconnection
             /// </summary>
-            protected event Action ClientDisconnected;
+            private event Action ClientDisconnected;
             /// <summary>
             /// Event listener for client connection
             /// </summary>
-            protected event Action ClientConnected;
+            private event Action ClientConnected;
             /// <summary>
             /// List of installed augmentations
             /// </summary>
-            protected List<Augmentation> augmentations = new List<Augmentation>();
+            private List<Augmentation> augmentations = new List<Augmentation>();
 
             /// <summary>
             /// Init the server
@@ -1479,19 +1495,15 @@ namespace NetLib
             /// <summary>
             /// The server socket
             /// </summary>
-            protected Socket serverSocket;
-            /// <summary>
-            /// The client socket
-            /// </summary>
-            protected Socket clientSocket;
+            private Socket serverSocket;
             /// <summary>
             /// The wrapped client socket
             /// </summary>
-            protected Clients.SSLClient client;
+            private Clients.SSLClient client;
             /// <summary>
             /// The endpoint to run the server on
             /// </summary>
-            protected IPEndPoint serverEndPoint;
+            private IPEndPoint serverEndPoint;
             /// <summary>
             /// The number of maximum bytes to read from the stream
             /// </summary>
@@ -1515,27 +1527,27 @@ namespace NetLib
             /// <summary>
             /// Indicated if the server's running
             /// </summary>
-            protected bool serverOffline = true;
+            private bool serverOffline = true;
             /// <summary>
             /// Event for client connection notification
             /// </summary>
-            protected event Action ClientConnected;
+            private event Action ClientConnected;
             /// <summary>
             /// Indicates if the server should restart after it's client closes
             /// </summary>
-            protected bool restartReading;
+            private bool restartReading;
             /// <summary>
             /// The SSL Parameters of the server
             /// </summary>
-            protected Utils.SSL.ServerSSLData sslParams;
+            private Utils.SSL.ServerSSLData sslParams;
             /// <summary>
             /// Event listener when the client disconnects
             /// </summary>
-            protected event Action ClientDisconnected;
+            private event Action ClientDisconnected;
             /// <summary>
             /// A list to keep installed augmentations in
             /// </summary>
-            protected List<Augmentation> augmentations = new List<Augmentation>();
+            private List<Augmentation> augmentations = new List<Augmentation>();
 
             /// <summary>
             /// Init the server
@@ -1854,15 +1866,15 @@ namespace NetLib
             /// <summary>
             /// The socket of the server
             /// </summary>
-            protected Socket serverSocket;
+            private Socket serverSocket;
             /// <summary>
             /// The connected client's socket
             /// </summary>
-            protected List<Tuple<string, Clients.TcpClient>> clients = new List<Tuple<string, Clients.TcpClient>>();
+            private List<(string ID, Clients.TcpClient Client)> clients = new List<(string, Clients.TcpClient)>();
             /// <summary>
             /// The endpoint to run the server on
             /// </summary>
-            protected IPEndPoint serverEndPoint;
+            private IPEndPoint serverEndPoint;
             /// <summary>
             /// The size of the buffer to receive from the client
             /// </summary>
@@ -1886,19 +1898,19 @@ namespace NetLib
             /// <summary>
             /// Indicates if the server's running
             /// </summary>
-            protected bool serverOffline = true;
+            private bool serverOffline = true;
             /// <summary>
             /// Event listener for when a new client is connected
             /// </summary>
-            protected event Action<string> ClientConnected;
+            private event Action<string> ClientConnected;
             /// <summary>
             /// Event listener for when a client is disconnected
             /// </summary>
-            protected event Action<string> ClientDisconnected;
+            private event Action<string> ClientDisconnected;
             /// <summary>
             /// A list of installed augmentations
             /// </summary>
-            protected List<Augmentation> augmentations = new List<Augmentation>();
+            private List<Augmentation> augmentations = new List<Augmentation>();
 
             /// <summary>
             /// Init the server
@@ -1963,10 +1975,8 @@ namespace NetLib
                         client.RecvSize = RecvSize;
                         client.SendEncoder = SendEncoder;
                         client.WriteNewLine = WriteNewLine;
-                        // Construct the clientData
-                        Tuple<string, Clients.TcpClient> clientData = new Tuple<string, Clients.TcpClient>(clientID, client);
                         // Add the client to the list
-                        clients.Add(clientData);
+                        clients.Add((clientID, client));
                         client.AddEventClientStopped(() => ClientDisconnected?.Invoke(clientID));
                         ClientConnected?.Invoke(clientID); // Fire the connection event 
                     }
@@ -1993,9 +2003,9 @@ namespace NetLib
             {
                 List<string> localClients = new List<string>(); // Define a new list for the return value
 
-                foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the clients
+                foreach (var (clientID, client) in clients) // Go through the clients
                 {
-                    localClients.Add(client.Item1); // Add the ID of the clients
+                    localClients.Add(clientID); // Add the ID of the clients
                 }
 
                 return localClients.ToArray(); // Return the client ID array
@@ -2008,8 +2018,8 @@ namespace NetLib
             /// <returns>The NetLib TcpClient associated with the given ID</returns>
             private Clients.TcpClient GetClientByID(string clientID)
             {
-                Tuple<string, Clients.TcpClient> tuple = clients.Find((data) => data.Item1 == clientID); // Find the matching client
-                if (tuple == null) // If not found
+                var (ID, client) = clients.Find((data) => data.ID == clientID); // Find the matching client
+                if (ID == null || client == null) // If not found
                 {
 #if Validation_hard // Not so important check
                     throw new ArgumentException("The specified clientID doesn't exist");
@@ -2018,7 +2028,7 @@ namespace NetLib
 #endif
                 }
 
-                return tuple.Item2; // Return the client instance
+                return client; // Return the client instance
             }
 
             /// <summary>
@@ -2110,9 +2120,9 @@ namespace NetLib
             {
                 augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
-                foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    GracefulCloseClient(client.Item2); // Close the client
+                    GracefulCloseClient(client); // Close the client
                 }
                 ServerClose(); // Close the server
                 serverOffline = true; // The server's stopped
@@ -2125,9 +2135,9 @@ namespace NetLib
             {
                 augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
-                foreach (Tuple<string, Clients.TcpClient> client in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    ForceCloseClient(client.Item2); // Force close the client
+                    ForceCloseClient(client); // Force close the client
                 }
                 ServerClose(); // Close the server
                 serverOffline = true; // The server's stopped
@@ -2223,9 +2233,9 @@ namespace NetLib
                 augmentations.Add(augmentation); // Add the augmentation to the list
                 augmentation.OnInstalled(this); // Notify the augmentation of the installation
 
-                foreach (Tuple<string, Clients.TcpClient> clientData in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    clientData.Item2.InstallAugmentation(augmentation); // Install the augmentation to the current client
+                    client.InstallAugmentation(augmentation); // Install the augmentation to the current client
                 }
             }
 
@@ -2238,9 +2248,9 @@ namespace NetLib
                 augmentations.Remove(augmentation); // Remote the augmentation from the list
                 augmentation.OnUninstalled(); // Notify the augmentation of the installation
 
-                foreach (Tuple<string, Clients.TcpClient> clientData in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    clientData.Item2.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
+                    client.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
                 }
             }
         }
@@ -2253,15 +2263,15 @@ namespace NetLib
             /// <summary>
             /// The socket of the server
             /// </summary>
-            protected Socket serverSocket;
+            private Socket serverSocket;
             /// <summary>
             /// The connected client's socket
             /// </summary>
-            protected List<Tuple<string, Clients.SSLClient>> clients = new List<Tuple<string, Clients.SSLClient>>();
+            private List<(string ID, Clients.SSLClient Client)> clients = new List<(string, Clients.SSLClient)>();
             /// <summary>
             /// The endpoint to run the server on
             /// </summary>
-            protected IPEndPoint serverEndPoint;
+            private IPEndPoint serverEndPoint;
             /// <summary>
             /// The size of the buffer to receive from the client
             /// </summary>
@@ -2285,23 +2295,23 @@ namespace NetLib
             /// <summary>
             /// Indicates if the server's running
             /// </summary>
-            protected bool serverOffline = true;
+            private bool serverOffline = true;
             /// <summary>
             /// Event listener for when a new client is connected
             /// </summary>
-            protected event Action<string> ClientConnected;
+            private event Action<string> ClientConnected;
             /// <summary>
             /// Event listener for when a client is disconnected
             /// </summary>
-            protected event Action<string> ClientDisconnected;
+            private event Action<string> ClientDisconnected;
             /// <summary>
             /// A list of installed augmentations
             /// </summary>
-            protected List<Augmentation> augmentations = new List<Augmentation>();
+            private List<Augmentation> augmentations = new List<Augmentation>();
             /// <summary>
             /// The SSL Parameters of the server
             /// </summary>
-            protected Utils.SSL.ServerSSLData sslParams;
+            private Utils.SSL.ServerSSLData sslParams;
 
             /// <summary>
             /// Init the server
@@ -2395,10 +2405,8 @@ namespace NetLib
                         client.RecvSize = RecvSize;
                         client.SendEncoder = SendEncoder;
                         client.WriteNewLine = WriteNewLine;
-                        // Construct the clientData
-                        Tuple<string, Clients.SSLClient> clientData = new Tuple<string, Clients.SSLClient>(clientID, client);
                         // Add the client to the list
-                        clients.Add(clientData);
+                        clients.Add((clientID, client));
                         client.AddEventClientStopped(() => ClientDisconnected?.Invoke(clientID));
                         ClientConnected?.Invoke(clientID); // Fire the connection event 
                     }
@@ -2425,9 +2433,9 @@ namespace NetLib
             {
                 List<string> localClients = new List<string>(); // Define a new list for the return value
 
-                foreach (Tuple<string, Clients.SSLClient> client in clients) // Go through the clients
+                foreach (var (ID, client) in clients) // Go through the clients
                 {
-                    localClients.Add(client.Item1); // Add the ID of the clients
+                    localClients.Add(ID); // Add the ID of the clients
                 }
 
                 return localClients.ToArray(); // Return the client ID array
@@ -2440,8 +2448,8 @@ namespace NetLib
             /// <returns>The NetLib SSL Client associated with the given ID</returns>
             private Clients.SSLClient GetClientByID(string clientID)
             {
-                Tuple<string, Clients.SSLClient> tuple = clients.Find((data) => data.Item1 == clientID); // Find the matching client
-                if (tuple == null) // If not found
+                var (ID, client) = clients.Find((data) => data.ID == clientID); // Find the matching client
+                if (ID == null || client == null) // If not found
                 {
 #if Validation_hard // Not so important check
                     throw new ArgumentException("The specified clientID doesn't exist");
@@ -2450,7 +2458,7 @@ namespace NetLib
 #endif
                 }
 
-                return tuple.Item2; // Return the client instance
+                return client; // Return the client instance
             }
 
             /// <summary>
@@ -2542,9 +2550,9 @@ namespace NetLib
             {
                 augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
-                foreach (Tuple<string, Clients.SSLClient> client in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    GracefulCloseClient(client.Item2); // Close the client
+                    GracefulCloseClient(client); // Close the client
                 }
                 ServerClose(); // Close the server
                 serverOffline = true; // The server's stopped
@@ -2557,9 +2565,9 @@ namespace NetLib
             {
                 augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations
                 if (serverOffline) return; // Check if the server's stopped
-                foreach (Tuple<string, Clients.SSLClient> client in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    ForceCloseClient(client.Item2); // Force close the client
+                    ForceCloseClient(client); // Force close the client
                 }
                 ServerClose(); // Close the server
                 serverOffline = true; // The server's stopped
@@ -2655,9 +2663,9 @@ namespace NetLib
                 augmentations.Add(augmentation); // Add the augmentation to the list
                 augmentation.OnInstalled(this); // Notify the augmentation of the installation
 
-                foreach (Tuple<string, Clients.SSLClient> clientData in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    clientData.Item2.InstallAugmentation(augmentation); // Install the augmentation to the current client
+                    client.InstallAugmentation(augmentation); // Install the augmentation to the current client
                 }
             }
 
@@ -2670,9 +2678,9 @@ namespace NetLib
                 augmentations.Remove(augmentation); // Remote the augmentation from the list
                 augmentation.OnUninstalled(); // Notify the augmentation of the installation
 
-                foreach (Tuple<string, Clients.SSLClient> clientData in clients) // Go through the connected clients
+                foreach (var (ID, client) in clients) // Go through the connected clients
                 {
-                    clientData.Item2.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
+                    client.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
                 }
             }
         }
@@ -2720,12 +2728,12 @@ namespace NetLib
             {
                 get
                 {
-                    return _readTimeout;
+                    return _readTimeout; // Return the timeout value
                 }
                 set
                 {
-                    _readTimeout = value;
-                    if (client != null) client.ReceiveTimeout = _readTimeout;
+                    _readTimeout = value; // Set the timeout value
+                    if (client != null) client.ReceiveTimeout = _readTimeout; // Live-set the value if the client is alrady started
                 }
             }
             /// <summary>
@@ -2762,14 +2770,6 @@ namespace NetLib
             protected bool fromServer = false;
 
             /// <summary>
-            /// Empty constructor for SSL clients (don't use this constructor)
-            /// </summary>
-            public TcpClient()
-            {
-                ClientInit(); // Init the tcp client
-            }
-
-            /// <summary>
             /// Init the client
             /// </summary>
             private void ClientInit()
@@ -2793,12 +2793,12 @@ namespace NetLib
             public TcpClient(string address, int portNumber)
             {
                 ClientInit(); // Init the client
-                Tuple<bool, IPAddress> ipResult = Utils.IPv4.IsValidDestination(address); // Check if the address is valid, and resolve dns if needed
+                var (isValid, ipAddress) = Utils.IPv4.IsValidDestination(address); // Check if the address is valid, and resolve dns if needed
 #if Validation_hard // Not important check, socket connection will throw anyways if any of the data is wrong
-                if (!ipResult.Item1) throw new ArgumentException($"The following destination is not valid: {address}"); // Invalid address or hostname not resolved
+                if (!isValid) throw new ArgumentException($"The following destination is not valid: {address}"); // Invalid address or hostname not resolved
                 if (!Utils.IPv4.IsPortValid(portNumber)) throw new ArgumentException($"The following port number is not valid {portNumber}"); // Invalid port number
 #endif
-                clientEndPoint = new IPEndPoint(ipResult.Item2, portNumber); // Set the endpoint to connect to
+                clientEndPoint = new IPEndPoint(ipAddress, portNumber); // Set the endpoint to connect to
             }
 
             /// <summary>
@@ -2911,30 +2911,6 @@ namespace NetLib
                 augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
 
                 return res; // Return the constructed line from the connection
-            }
-
-            /// <summary>
-            /// Invoke the data received event
-            /// </summary>
-            /// <param name="buffer">The byte array read from the stream</param>
-            protected void DataReceivedMethod(byte[] buffer)
-            {
-#if Validation_hard // Not so important check
-                if (receiveCallbackMode != Utils.NetworkIO.ReadEventCodes.Both && receiveCallbackMode != Utils.NetworkIO.ReadEventCodes.DataRecv) throw new InvalidOperationException("Can't invoke read line event, while receive data is stopped"); // Check if the receive method is started
-#endif
-                DataReceived?.Invoke(buffer); // Invoke the event with the specified data
-            }
-
-            /// <summary>
-            /// Invoke the new line received event
-            /// </summary>
-            /// <param name="data">The new line read from the stream</param>
-            protected void LineReceivedMethod(string data)
-            {
-#if Validation_hard // Not so important check
-                if (receiveCallbackMode != Utils.NetworkIO.ReadEventCodes.Both && receiveCallbackMode != Utils.NetworkIO.ReadEventCodes.LineRecv) throw new InvalidOperationException("Can't invoke read line event, while read line is stopped"); // Check if the receiving is started
-#endif
-                LineReceived?.Invoke(data); // Invoke the event
             }
 
             /// <summary>
@@ -3143,11 +3119,7 @@ namespace NetLib
 #endif
                 augmentations.ForEach((aug) =>
                 {
-                    Tuple<byte[], int, int> result = aug.OnBeforeSendBytes(buffer, offset, length); // Let the augmentations modify the data
-                    // Unpack the tuple
-                    buffer = result.Item1;
-                    offset = result.Item2;
-                    length = result.Item3;
+                    (buffer, offset, length) = aug.OnBeforeSendBytes(buffer, offset, length); // Let the augmentations modify the data
                 });
 
                 augmentations.ForEach((aug) => aug.OnAfterSendBytes(buffer, offset, length)); // Let the augmentations inspect the data
@@ -3206,11 +3178,11 @@ namespace NetLib
             /// <summary>
             /// The endpoint to connect to
             /// </summary>
-            protected IPEndPoint clientEndPoint;
+            private IPEndPoint clientEndPoint;
             /// <summary>
             /// The client socket
             /// </summary>
-            protected Socket client;
+            private Socket client;
             /// <summary>
             /// Encoding for reading new lines
             /// </summary>
@@ -3238,12 +3210,12 @@ namespace NetLib
             {
                 get
                 {
-                    return _readTimeout;
+                    return _readTimeout; // Return the timeout value
                 }
                 set
                 {
-                    _readTimeout = value;
-                    if (sslStream != null) sslStream.ReadTimeout = _readTimeout;
+                    _readTimeout = value; // Set the timeout value
+                    if (sslStream != null) sslStream.ReadTimeout = _readTimeout; // Live-set the timeout value if the client is already started
                 }
             }
             /// <summary>
@@ -3253,31 +3225,31 @@ namespace NetLib
             /// <summary>
             /// Event for receiving byte data
             /// </summary>
-            protected event Action<byte[]> DataReceived;
+            private event Action<byte[]> DataReceived;
             /// <summary>
             /// Event for receiving new lines
             /// </summary>
-            protected event Action<string> LineReceived;
+            private event Action<string> LineReceived;
             /// <summary>
             /// Enabled receive events
             /// </summary>
-            protected Utils.NetworkIO.ReadEventCodes receiveCallbackMode;
+            private Utils.NetworkIO.ReadEventCodes receiveCallbackMode;
             /// <summary>
             /// Indicates if the client's running
             /// </summary>
-            protected bool clientOffline = true;
+            private bool clientOffline = true;
             /// <summary>
             /// Event for client disconnect notifications
             /// </summary>
-            protected event Action ClientStopped;
+            private event Action ClientStopped;
             /// <summary>
             /// A list of installed augmentations
             /// </summary>
-            protected List<Augmentation> augmentations = new List<Augmentation>();
+            private List<Augmentation> augmentations = new List<Augmentation>();
             /// <summary>
             /// Indicates if a server socket created this client
             /// </summary>
-            protected bool fromServer = false;
+            private readonly bool fromServer = false;
             /// <summary>
             /// SSL Stream to wrap the plain text stream in
             /// </summary>
@@ -3327,12 +3299,12 @@ namespace NetLib
             public SSLClient(string address, int portNumber, bool certWarn)
             {
                 TcpClientInit(); // Init the client
-                Tuple<bool, IPAddress> ipResult = Utils.IPv4.IsValidDestination(address); // Check if the address is valid, and resolve dns if needed
+                var (isValid, ipAddress) = Utils.IPv4.IsValidDestination(address); // Check if the address is valid, and resolve dns if needed
 #if Validation_hard // Not important check, socket connection will throw anyways if any of the data is wrong
-                if (!ipResult.Item1) throw new ArgumentException($"The following destination is not valid: {address}"); // Invalid address or hostname not resolved
+                if (!isValid) throw new ArgumentException($"The following destination is not valid: {address}"); // Invalid address or hostname not resolved
                 if (!Utils.IPv4.IsPortValid(portNumber)) throw new ArgumentException($"The following port number is not valid {portNumber}"); // Invalid port number
 #endif
-                clientEndPoint = new IPEndPoint(ipResult.Item2, portNumber); // Set the endpoint to connect to
+                clientEndPoint = new IPEndPoint(ipAddress, portNumber); // Set the endpoint to connect to
                 ClientInit(certWarn); // Init the client
                 serverDestination = address; // Set the destination
             }
@@ -3391,8 +3363,10 @@ namespace NetLib
                 clientOffline = false; // The client is running now
                 if (!fromServer) augmentations.ForEach((aug) => aug.OnStart()); // Signal the start event to augmentations if we're not created from a server class
                 NetworkStream ns = new NetworkStream(client); // Get the network stream of the client
-                sslStream = new System.Net.Security.SslStream(ns); // Wrap the stream inside ssl stream
-                sslStream.ReadTimeout = ReadTimeout;
+                sslStream = new System.Net.Security.SslStream(ns)
+                {
+                    ReadTimeout = ReadTimeout
+                }; // Wrap the stream inside ssl stream
                 sslStream.AuthenticateAsClient(serverDestination); // Authenticate to the server
             }
 
@@ -3648,11 +3622,7 @@ namespace NetLib
             {
                 augmentations.ForEach((aug) =>
                 {
-                    Tuple<byte[], int, int> result = aug.OnBeforeSendBytes(buffer, offset, length); // Get the result
-                    // Unpack the tuple
-                    buffer = result.Item1;
-                    offset = result.Item2;
-                    length = result.Item3;
+                    (buffer, offset, length) = aug.OnBeforeSendBytes(buffer, offset, length); // Let the augmentations modify the data
                 }); // Let the augmentations modify the data
                 augmentations.ForEach((aug) => aug.OnAfterSendBytes(buffer, offset, length)); // Let the augmentations inspect the data
                 sslStream.Write(buffer, offset, length); // Write the bytes to the stream
@@ -3869,10 +3839,12 @@ namespace NetLib
             {
                 Debug($"[CON]: Connecting to {hostname}:{port}");
                 serverHostname = hostname;
-                TcpClient client = new TcpClient(Utils.IPv4.CreateEndPoint(hostname, port)); // Create a new tcp client
-                // Set the new line endings
-                client.ReadNewLine = "\r\n";
-                client.WriteNewLine = "\r\n";
+                TcpClient client = new TcpClient(Utils.IPv4.CreateEndPoint(hostname, port))
+                {
+                    // Set the new line endings
+                    ReadNewLine = "\r\n",
+                    WriteNewLine = "\r\n"
+                }; // Create a new tcp client
                 client.Start(); // Connect to the server
                 // Set the sockets
                 write = client as INetworkWriter;
@@ -3932,11 +3904,9 @@ namespace NetLib
             private byte[] Download(string remoteFile)
             {
                 Debug("[DWL]: Starting download procedure");
-                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
                 ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
-                Tuple<INetworkReader, INetworkWriter, INetworkClient> sockets = ConnectDataPort(dataPort, false); // Connect to the data channel
-                INetworkReader _read = sockets.Item1; // Get the read socket
-                INetworkClient _client = sockets.Item3; // Get the client interface
+                var (_read, _, _client) = ConnectDataPort(dataPort, false); // Connect to the data channel
                 _client.ReadTimeout = 1000; // Set a basic read timeout to know when the data is fully received
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
@@ -3969,15 +3939,17 @@ namespace NetLib
             private byte[] DownloadSSL(string remoteFile)
             {
                 Debug("[DWL]: Starting download procedure");
-                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
-                INetworkClient _client = ConnectDataPort(dataPort, false).Item3; // Connect to the data channel
+                ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                var (_, _, _client) = ConnectDataPort(dataPort, false); // Connect to the data channel
                 ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
                 sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
-                SSLClient client = new SSLClient(sslStream); // Wrap the ssl stream in the ssl client
-                client.ReadTimeout = 1000; // Set a basic read timeout to know when the data is fully received
+                SSLClient client = new SSLClient(sslStream)
+                {
+                    ReadTimeout = 1000 // Set a basic read timeout to know when the data is fully received
+                }; // Wrap the ssl stream in the ssl client
                 byte[] result = new byte[0]; // Define the result
                 while (true)
                 {
@@ -4032,13 +4004,13 @@ namespace NetLib
             private void Upload(string fileName, byte[] fileBytes)
             {
                 Debug("[UPL]: Starting upload procedure");
-                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
                 ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
-                INetworkWriter _write = ConnectDataPort(dataPort, ssl).Item2; // Get the write socket of the data channel
+                var (_, _write, _) = ConnectDataPort(dataPort, ssl); // Get the write socket of the data channel
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
-                _write.DirectWrite(fileBytes, 0, fileBytes.Length);
-                dataSocket.ForceStop();
+                _write.DirectWrite(fileBytes, 0, fileBytes.Length); // Write the file to the stream
+                dataSocket.ForceStop(); // Stop the data channel socket
                 Debug("[UPL]: File bytes sent to server");
                 resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
@@ -4053,8 +4025,8 @@ namespace NetLib
             private void UploadSSL(string fileName, byte[] fileBytes)
             {
                 Debug("[UPL]: Starting upload procedure");
-                Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
-                INetworkClient _client = ConnectDataPort(dataPort, false).Item3; // Connect to the data channel
+                ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
+                var (_, _, _client) = ConnectDataPort(dataPort, false); // Connect to the data channel
                 ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
@@ -4177,7 +4149,7 @@ namespace NetLib
                     else files += file.fileName + "/"; // Append the file to the files list
                 }
 
-                if (files.Length > 0) files = files.Substring(0, files.Length - 1); // Remove the ending slash
+                if (files.Length > 0) files = files.RemoveLast(1); // Remove the ending slash
                 result.Add(parentDir, files); // Add the files to the result
                 Debug($"[RFL]: Remove file list for {parentDir} built");
 
@@ -4238,7 +4210,7 @@ namespace NetLib
             /// Output ftp debug messages
             /// </summary>
             /// <param name="msg">The message to print to stdout</param>
-            internal void Debug(string msg)
+            private void Debug(string msg)
             {
                 if (DebugMode) Console.WriteLine(msg); // if debugging enabled write out the message
             }
@@ -4253,10 +4225,12 @@ namespace NetLib
                 if (resp.statusCode != Utils.FTP.StatusCode.AuthContinue) throw new System.Security.SecurityException("Server failed to init the TLS connection"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(netClient.GetRawStream()); // Create the ssl stream from the client
                 sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
-                SSLClient secureClient = new SSLClient(sslStream);
-                // Set the new line endings
-                secureClient.ReadNewLine = "\r\n";
-                secureClient.WriteNewLine = "\r\n";
+                SSLClient secureClient = new SSLClient(sslStream)
+                {
+                    // Set the new line endings
+                    ReadNewLine = "\r\n",
+                    WriteNewLine = "\r\n"
+                };
                 // Set the sockets
                 write = secureClient as INetworkWriter;
                 read = secureClient as INetworkReader;
@@ -4271,7 +4245,7 @@ namespace NetLib
             /// <param name="result">The result of the getDataPort function</param>
             /// <param name="useSSL">True to create and secure the socket automatically, otherwise false</param>
             /// </summary>
-            private Tuple<INetworkReader, INetworkWriter, INetworkClient> ConnectDataPort(Tuple<string, int> result, bool useSSL)
+            private (INetworkReader _read, INetworkWriter _write, INetworkClient _client) ConnectDataPort((string ip, int port) result, bool useSSL)
             {
                 Debug("[PASV Handler]: Initiating PASV connection");
                 // Define the network sockets
@@ -4281,7 +4255,7 @@ namespace NetLib
 
                 if (!useSSL)
                 {
-                    TcpClient ftpData = new TcpClient(Utils.IPv4.CreateEndPoint(result.Item1, result.Item2)); // Create a new tcp client
+                    TcpClient ftpData = new TcpClient(Utils.IPv4.CreateEndPoint(result.ip, result.port)); // Create a new tcp client
                     ftpData.Start(); // Connect to the server
                     dataSocket = ftpData as INetworkSocket; // Get the data channel socket
                     _read = ftpData as INetworkReader; // Get the read socket from the client
@@ -4290,7 +4264,7 @@ namespace NetLib
                 }
                 else
                 {
-                    SSLClient ftpData = new SSLClient(Utils.IPv4.CreateEndPoint(result.Item1, result.Item2), !checkSSL); // Create a new ssl client
+                    SSLClient ftpData = new SSLClient(Utils.IPv4.CreateEndPoint(result.ip, result.port), !checkSSL); // Create a new ssl client
                     ftpData.SetServerDestination(serverHostname);
                     ftpData.Start(); // Connect to the server
                     dataSocket = ftpData as INetworkSocket; // Get the data channel socket
@@ -4302,14 +4276,14 @@ namespace NetLib
 
                 Debug("[PASV Handler]: PASV channel connected");
 
-                return new Tuple<INetworkReader, INetworkWriter, INetworkClient>(_read, _write, _client); // Return the result
+                return (_read, _write, _client); // Return the result
             }
 
             /// <summary>
             /// Get the IP and port to connect to on a passive connection
             /// </summary>
             /// <returns>The IP and port to connect to</returns>
-            private Tuple<string, int> GetDataPort()
+            private (string ip, int port) GetDataPort()
             {
                 ExecuteCommand(new Utils.FTP.Request() { command = "PASV", arguments = "" }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Wait for response
@@ -4340,11 +4314,11 @@ namespace NetLib
                 Debug($"[FL]: Begin list directory");
                 if (directory != "") Cwd(directory);
                 Debug($"[FL]: Switched to target directory");
-                Tuple<string, int> dataPort = GetDataPort();
+                ValueTuple<string, int> dataPort = GetDataPort();
                 byte[] pasvBuffer = new byte[0];
                 if (!ssl)
                 {
-                    INetworkReader _read = ConnectDataPort(dataPort, ssl).Item1;
+                    var (_read, _, _) = ConnectDataPort(dataPort, ssl);
                     _read.AddEventDataReceived((data) => // When new data received
                     {
                         int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
@@ -4368,13 +4342,13 @@ namespace NetLib
             /// <summary>
             /// Send the file list command to the server
             /// </summary>
-            private byte[] ListFiles(Tuple<string, int> dPort)
+            private byte[] ListFiles((string ip, int port) dPort)
             {
                 ExecuteCommand(new Utils.FTP.Request() { command = "LIST", arguments = "" }); // Send the command to the server
                 byte[] pasvBuffer = new byte[0]; // Define the result buffer
                 if (ssl)
                 {
-                    INetworkReader _read = ConnectDataPort(dPort, ssl).Item1; // Connect to the data port
+                    var (_read, _, _) = ConnectDataPort(dPort, ssl); // Connect to the data port
                     _read.AddEventDataReceived((data) => // When new data received
                     {
                         int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
@@ -4677,9 +4651,9 @@ namespace NetLib
             /// </summary>
             /// <param name="destination">The address or hostname to check</param>
             /// <returns>A boolean indicating if it's a valid address and an IPAddress, with the specified destination</returns>
-            public static Tuple<bool, IPAddress> IsValidDestination(string destination)
+            public static (bool isValid, IPAddress ipAddress) IsValidDestination(string destination)
             {
-                Tuple<bool, IPAddress> ipCheck = IsValidAddress(destination); // Check if the IP is valid
+                ValueTuple<bool, IPAddress> ipCheck = IsValidAddress(destination); // Check if the IP is valid
                 if (ipCheck.Item1) return ipCheck; // If IP is valid return the IP and true
                 else return Dns.IsValidHostname(destination); // Try DNS resolving
             }
@@ -4689,9 +4663,9 @@ namespace NetLib
             /// </summary>
             /// <param name="ipAddress">The IP Address to check</param>
             /// <returns>A boolean indicating if the ip is valid and the IP Address</returns>
-            public static Tuple<bool, IPAddress> IsValidAddress(string ipAddress)
+            public static (bool isValid, IPAddress ipAddress) IsValidAddress(string ipAddress)
             {
-                return new Tuple<bool, IPAddress>(IPAddress.TryParse(ipAddress, out IPAddress address), address); // Return the results of the check and the IP Address
+                return (IPAddress.TryParse(ipAddress, out IPAddress address), address); // Return the results of the check and the IP Address
             }
 
             /// <summary>
@@ -4702,10 +4676,10 @@ namespace NetLib
             /// <returns>A valid endpoint generated from the specified data</returns>
             public static IPEndPoint CreateEndPoint(string destination, int portNumber)
             {
-                if (!IsPortValid(portNumber)) throw new ArgumentException("Port number outside of the valid port number range");
-                Tuple<bool, IPAddress> ip = IsValidDestination(destination);
-                if (!ip.Item1) throw new ArgumentException("The specified destination is invalid!");
-                return new IPEndPoint(ip.Item2, portNumber);
+                if (!IsPortValid(portNumber)) throw new ArgumentException("Port number outside of the valid port number range"); // Check if the port number is valid
+                var (isValid, ip) = IsValidDestination(destination); // Check if the destination is valid
+                if (!isValid) throw new ArgumentException("The specified destination is invalid!"); // Destination invalid
+                return new IPEndPoint(ip, portNumber); // Return IPEndPoint
             }
         }
 
@@ -4879,7 +4853,7 @@ namespace NetLib
             /// </summary>
             /// <param name="response">The response to get the data from</param>
             /// <returns>The ip and the port to connect to</returns>
-            public static Tuple<string, int> GetPasvDestination(string response)
+            public static (string ip, int port) GetPasvDestination(string response)
             {
                 int start = response.IndexOf('(') + 1; // Get the start of the substring
                 int end = response.IndexOf(')'); // Get the end of the substring
@@ -4891,11 +4865,11 @@ namespace NetLib
                 {
                     ip += dataParts[i] + "."; // Append the part to the IP
                 }
-                ip = ip.Substring(0, ip.Length - 1); // Remove the trailing dot
+                ip = ip.RemoveLast(1); // Remove the trailing dot
                 int p1 = dataParts[4].ToInt(); // Convert the port1 to int
                 int p2 = dataParts[5].ToInt(); // Convert the port2 to int
                 port = p1 * 256 + p2; // Calculate the destination port
-                return new Tuple<string, int>(ip, port); // Return the connection data
+                return (ip, port); // Return the connection data
             }
 
             /// <summary>
@@ -5054,12 +5028,12 @@ namespace NetLib
             /// </summary>
             /// <param name="hostname">The hostname to check</param>
             /// <returns>A boolean indicating if the hostname is valid and the resolved IP Address</returns>
-            public static Tuple<bool, IPAddress> IsValidHostname(string hostname)
+            public static (bool isValid, IPAddress ipAddress) IsValidHostname(string hostname)
             {
                 try
                 {
                     IPAddress[] result = System.Net.Dns.GetHostAddresses(hostname); // Resolve the hostname
-                    return new Tuple<bool, IPAddress>(true, result[0]); // Return the IP Address of the hostname and true
+                    return (true, result[0]); // Return the IP Address of the hostname and true
                 }
                 catch (ArgumentException ex) // The hostname isn't valid
                 {
@@ -5067,7 +5041,7 @@ namespace NetLib
                     Console.WriteLine("Hostname resolvation failed, due to the following exception:");
                     Console.WriteLine(ex);
 #endif
-                    return new Tuple<bool, IPAddress>(false, null); // Return false and null for the IP Address
+                    return (false, null); // Return false and null for the IP Address
                 }
             }
         }
