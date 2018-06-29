@@ -3800,6 +3800,7 @@ namespace NetLib
             public FTPClient(bool useSSL = false)
             {
                 ssl = useSSL; // Set the ssl flag
+                Debug($"[OBJ]: Created, ssl usage set to: {ssl}");
             }
 
             /// <summary>
@@ -3809,8 +3810,10 @@ namespace NetLib
             public void CheckCertificateValidity(bool check)
             {
                 checkSSL = check; // Set the validation flag
+                Debug($"[OBJ]: SSL Certificate Validation set to: {ssl}");
                 if (!checkSSL) // If we ignore certificate warnings
                 {
+                    Debug($"[OBJ]: WARNING this could be potentially dangerous!");
                     //Define a new callback for validation
                     ServicePointManager.ServerCertificateValidationCallback = new System.Net.Security.RemoteCertificateValidationCallback((sender, cert, chain, errors) =>
                     {
@@ -3824,13 +3827,16 @@ namespace NetLib
             /// </summary>
             public void Disconnect()
             {
+                Debug($"[CTRL]: Initiating quit command");
                 if (write == null) throw new InvalidOperationException("Can't disconnect from server, when you're not even connected to it");
                 string disconnect = (new Utils.FTP.Request() { command = "QUIT", arguments = "" }).ToString(); // Get the command to send
                 write.WriteLine(disconnect); // Send the command
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ClosingControlConnection) throw new System.Security.SecurityException("Server failed to close control channel connection"); // Throw if unexpected status code
+                Debug($"[CTRL]: Server accepted quit");
                 netClient.CloseStream(); // Close the stream
                 socket.ForceStop(); // Close the socket
+                Debug($"[OBJ]: All sockets, stream are now closed");
             }
 
             /// <summary>
@@ -3861,6 +3867,7 @@ namespace NetLib
             /// <param name="password">The password to login to the FTP server with</param>
             public void Connect(string hostname, int port, string username, string password)
             {
+                Debug($"[CON]: Connecting to {hostname}:{port}");
                 serverHostname = hostname;
                 TcpClient client = new TcpClient(Utils.IPv4.CreateEndPoint(hostname, port)); // Create a new tcp client
                 // Set the new line endings
@@ -3872,12 +3879,24 @@ namespace NetLib
                 read = client as INetworkReader;
                 socket = client as INetworkSocket;
                 netClient = client as INetworkClient;
+                Debug($"[CON]: Connection to server established");
 
                 GetServer(); // Get the message of the server
                 if (ssl) BeginTLS();
                 Login(username, password); // Login to the server
                 SetType(); // Set the transfer type
                 Pwd(); // Get the current working directory
+                Debug($"[CON]: Client init completed, ready for work");
+            }
+
+            /// <summary>
+            /// Execute and ftp command on the remote server
+            /// </summary>
+            /// <param name="req">The command to execute</param>
+            private void ExecuteCommand(Utils.FTP.Request req)
+            {
+                write.WriteLine(req.ToString()); // Send the command to the server
+                Debug($"[CMD]: {req.ToString()}"); // Debug output the command
             }
 
             /// <summary>
@@ -3887,9 +3906,11 @@ namespace NetLib
             /// <param name="localFile">The path to save the file to (directory)</param>
             public void DownloadFile(string remoteFile, string localFile)
             {
+                Debug($"[DWL]: Starting file download");
                 string newName = localFile + "\\" + remoteFile; // Get the new path of the local file
                 byte[] data = DownloadFile(remoteFile); // Download the file
                 System.IO.File.WriteAllBytes(newName, data); // Write the file to disk
+                Debug($"[DWL]: File contents written to disk");
             }
 
             /// <summary>
@@ -3912,9 +3933,7 @@ namespace NetLib
             {
                 Debug("[DWL]: Starting download procedure");
                 Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
-                string downloadFile = (new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }).ToString(); // Get the command to send
-                write.WriteLine(downloadFile); // Send the command
-                Debug($"[CMD]: {downloadFile}");
+                ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
                 Tuple<INetworkReader, INetworkWriter, INetworkClient> sockets = ConnectDataPort(dataPort, false); // Connect to the data channel
                 INetworkReader _read = sockets.Item1; // Get the read socket
                 INetworkClient _client = sockets.Item3; // Get the client interface
@@ -3952,9 +3971,7 @@ namespace NetLib
                 Debug("[DWL]: Starting download procedure");
                 Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
                 INetworkClient _client = ConnectDataPort(dataPort, false).Item3; // Connect to the data channel
-                string downloadFile = (new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }).ToString(); // Get the command to send
-                write.WriteLine(downloadFile); // Send the command
-                Debug($"[CMD]: {downloadFile}");
+                ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
@@ -4016,9 +4033,7 @@ namespace NetLib
             {
                 Debug("[UPL]: Starting upload procedure");
                 Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
-                string uploadFile = (new Utils.FTP.Request() { command = "STOR", arguments = fileName }).ToString(); // Get the command to send
-                write.WriteLine(uploadFile); // Send the command
-                Debug($"[CMD]: {uploadFile}");
+                ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
                 INetworkWriter _write = ConnectDataPort(dataPort, ssl).Item2; // Get the write socket of the data channel
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
@@ -4040,9 +4055,7 @@ namespace NetLib
                 Debug("[UPL]: Starting upload procedure");
                 Tuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
                 INetworkClient _client = ConnectDataPort(dataPort, false).Item3; // Connect to the data channel
-                string uploadFile = (new Utils.FTP.Request() { command = "STOR", arguments = fileName }).ToString(); // Get the command to send
-                write.WriteLine(uploadFile); // Send the command
-                Debug($"[CMD]: {uploadFile}");
+                ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
@@ -4065,6 +4078,7 @@ namespace NetLib
             /// <param name="targetDirectory">The directory to move the file to (specify full path!)</param>
             public void MoveFile(string fileToMove, string targetDirectory)
             {
+                Debug($"[MV]: Constructing special rename command");
                 string t = targetDirectory;
                 if (t[t.Length - 1] == '/') t += fileToMove; // Check if the targetDirectory has an ending slash
                 else t += "/" + fileToMove; // Add the ending slash
@@ -4078,14 +4092,15 @@ namespace NetLib
             /// <param name="newName">The new name of the file (with extension)</param>
             public void RenameFile(string fileToRename, string newName)
             {
-                string renameFrom = (new Utils.FTP.Request() { command = "RNFR", arguments = fileToRename }).ToString(); // Get the command to send
-                write.WriteLine(renameFrom); // Send the command
+                Debug($"[REN]: Initiating rename");
+                ExecuteCommand(new Utils.FTP.Request() { command = "RNFR", arguments = fileToRename }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionPending) throw new System.Security.SecurityException("Failed to init rename function"); // Throw if unexpected status code
-                string renameTo = (new Utils.FTP.Request() { command = "RNTO", arguments = newName }).ToString(); // Get the command to send
-                write.WriteLine(renameTo); // Send the command
+                Debug($"[REN]: File to rename, located, so far so good");
+                ExecuteCommand(new Utils.FTP.Request() { command = "RNTO", arguments = newName }); // Send the command to the server
                 resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to rename the file"); // Throw if unexpected status code
+                Debug($"[REN]: File renamed");
             }
 
             /// <summary>
@@ -4094,10 +4109,14 @@ namespace NetLib
             /// <param name="directoryName">The name of the directory to remove</param>
             public void DeleteDirectory(string directoryName)
             {
+                Debug($"[DDEL]: Initiating directory delete");
                 string pwd = Pwd(); // Get the current working directory
                 string fullPath = pwd + "/" + directoryName; // Get the full path of the specified directory
+                Debug($"[DDEL]: Got full directory path to delete => {fullPath}");
                 Dictionary<string, string> rmfList = BuildRemoveFileList(fullPath); // Build the list of files to remove from the directory
+                Debug($"[DDEL]: File remove list constructed");
                 RemoveFileList(rmfList); // Remove the files from the directory and the directory itself
+                Debug($"[DDEL]: File remove list executed without errors");
             }
 
             /// <summary>
@@ -4105,10 +4124,10 @@ namespace NetLib
             /// </summary>
             public void CdUp()
             {
-                string oneUp = (new Utils.FTP.Request() { command = "CDUP", arguments = "" }).ToString(); // Get the command to send
-                write.WriteLine(oneUp); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "CDUP", arguments = "" }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+                Debug($"[UP1]: Changed the current directory to the parent directory");
             }
 
             /// <summary>
@@ -4117,6 +4136,7 @@ namespace NetLib
             /// <param name="list">The list of files to remove</param>
             private void RemoveFileList(Dictionary<string, string> list)
             {
+                Debug($"[RFL]: Begin remove file list execution");
                 foreach (KeyValuePair<string, string> kvp in list) // Go through the files
                 {
                     string[] files = kvp.Value.Split('/'); // Get each file one by one
@@ -4131,6 +4151,7 @@ namespace NetLib
                     CdUp(); // Go to the parent folder
                     RemoveDirectory(kvp.Key); // Remove the folder
                 }
+                Debug($"[RFL]: End of remove file list execution");
             }
 
             /// <summary>
@@ -4140,6 +4161,7 @@ namespace NetLib
             /// <returns>The file list to remove</returns>
             private Dictionary<string, string> BuildRemoveFileList(string parentDir)
             {
+                Debug($"[RFL]: Building remove file list of {parentDir}");
                 if (parentDir == "/") throw new AccessViolationException("You can't delete the ftp root folder!"); // Check if someone's nasty
                 Dictionary<string, string> result = new Dictionary<string, string>(); // Define the result
                 Utils.FTP.File[] subFiles = ListDirectory(parentDir); // Get the files in the parent directory
@@ -4157,6 +4179,7 @@ namespace NetLib
 
                 if (files.Length > 0) files = files.Substring(0, files.Length - 1); // Remove the ending slash
                 result.Add(parentDir, files); // Add the files to the result
+                Debug($"[RFL]: Remove file list for {parentDir} built");
 
                 return result; // Return the result
             }
@@ -4167,10 +4190,10 @@ namespace NetLib
             /// <param name="directoryName">The name of the directory to remove</param>
             private void RemoveDirectory(string directoryName)
             {
-                string deleteDirectory = (new Utils.FTP.Request() { command = "RMD", arguments = directoryName }).ToString(); // Get the command to send
-                write.WriteLine(deleteDirectory); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "RMD", arguments = directoryName }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+                Debug($"[RMD]: Directory {directoryName} removed");
             }
 
             /// <summary>
@@ -4179,10 +4202,10 @@ namespace NetLib
             /// <param name="fileName">The name of the file to remove</param>
             public void DeleteFile(string fileName)
             {
-                string deleteFile = (new Utils.FTP.Request() { command = "DELE", arguments = fileName }).ToString(); // Get the command to send
-                write.WriteLine(deleteFile); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "DELE", arguments = fileName }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+                Debug($"[FDEL]: File {fileName} deleted");
             }
 
             /// <summary>
@@ -4191,10 +4214,10 @@ namespace NetLib
             /// <param name="directoryName">The name of the new directory</param>
             public void CreateNewDirectory(string directoryName)
             {
-                string createDir = (new Utils.FTP.Request() { command = "MKD", arguments = directoryName }).ToString(); // Get the command to send
-                write.WriteLine(createDir); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "MKD", arguments = directoryName }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
+                Debug($"[MKD]: Directory {directoryName} created");
             }
 
             /// <summary>
@@ -4202,12 +4225,10 @@ namespace NetLib
             /// </summary>
             private void SetupSecureDataChannel()
             {
-                string setPBSZ = (new Utils.FTP.Request() { command = "PBSZ", arguments = "0" }).ToString(); // Get the command to send
-                write.WriteLine(setPBSZ); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "PBSZ", arguments = "0" }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new System.Security.SecurityException("Failed to set the protection buffer size"); // Throw if unexpected status code
-                string setProtection = (new Utils.FTP.Request() { command = "PROT", arguments = "P" }).ToString(); // Get the command to send
-                write.WriteLine(setProtection); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "PROT", arguments = "P" }); // Send the command to the server
                 resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new System.Security.SecurityException("Failed to set the protection level of the data channel"); // Throw if unexpected status code
                 Debug("[TLS]: Data channel secured");
@@ -4227,8 +4248,7 @@ namespace NetLib
             /// </summary>
             private void BeginTLS()
             {
-                string authTls = (new Utils.FTP.Request() { command = "AUTH", arguments = "TLS" }).ToString(); // Get the command to send
-                write.WriteLine(authTls); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "AUTH", arguments = "TLS" }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.AuthContinue) throw new System.Security.SecurityException("Server failed to init the TLS connection"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(netClient.GetRawStream()); // Create the ssl stream from the client
@@ -4291,8 +4311,7 @@ namespace NetLib
             /// <returns>The IP and port to connect to</returns>
             private Tuple<string, int> GetDataPort()
             {
-                string getDataPort = (new Utils.FTP.Request() { command = "PASV", arguments = "" }).ToString(); // Get the command
-                write.WriteLine(getDataPort); // Send the command to the server
+                ExecuteCommand(new Utils.FTP.Request() { command = "PASV", arguments = "" }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Wait for response
                 if (resp.statusCode != Utils.FTP.StatusCode.EnterPasvMode) throw new Exception("Failed to start entering to passive mode"); // Throw an exception if unexpected status code
                 Debug("[PASV Handler]: Got PASV destination");
@@ -4305,10 +4324,10 @@ namespace NetLib
             /// <param name="type">Set to "I" for binary mode and set to "A" for ASCII mode</param>
             private void SetType(string type = "I")
             {
-                string setType = (new Utils.FTP.Request() { command = "TYPE", arguments = type }).ToString(); // Get the command to send
-                write.WriteLine(setType); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "TYPE", arguments = type }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new Exception("Failed to set the transfer type"); // Throw if unexpected status code
+                Debug($"[TYP]: Transfer type changed to: {type}");
             }
 
             /// <summary>
@@ -4318,7 +4337,9 @@ namespace NetLib
             /// <returns>A list of files inside the directory</returns>
             public Utils.FTP.File[] ListDirectory(string directory)
             {
+                Debug($"[FL]: Begin list directory");
                 if (directory != "") Cwd(directory);
+                Debug($"[FL]: Switched to target directory");
                 Tuple<string, int> dataPort = GetDataPort();
                 byte[] pasvBuffer = new byte[0];
                 if (!ssl)
@@ -4326,7 +4347,6 @@ namespace NetLib
                     INetworkReader _read = ConnectDataPort(dataPort, ssl).Item1;
                     _read.AddEventDataReceived((data) => // When new data received
                     {
-                        Debug("Data read from the data channel");
                         int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
                         byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
                         Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
@@ -4334,12 +4354,14 @@ namespace NetLib
                         Array.Copy(tmp, pasvBuffer, tmp.Length); // Copy the previous buffer
                         Array.ConstrainedCopy(data, 0, pasvBuffer, tmp.Length, data.Length); // Copy the received data
                     });
+                    Debug($"[FL]: Read setup without TLS: done");
                 }
 
                 byte[] _tmp = ListFiles(dataPort); // Send the file list command (blocking call until file listing finishes)
                 if (!ssl) dataSocket.ForceStop(); // Kill the data channel
                 else pasvBuffer = _tmp;
                 string result = socket.RecvEncoder.GetString(pasvBuffer); // Get the string result of the data buffer
+                Debug($"[FL]: File list transfered, parsing the results");
                 return Utils.FTP.ParseFileList(result); // Return the file list
             }
 
@@ -4348,8 +4370,7 @@ namespace NetLib
             /// </summary>
             private byte[] ListFiles(Tuple<string, int> dPort)
             {
-                string listDirectory = (new Utils.FTP.Request() { command = "LIST", arguments = "" }).ToString(); // Get the list command
-                write.WriteLine(listDirectory); // Send the command to the server
+                ExecuteCommand(new Utils.FTP.Request() { command = "LIST", arguments = "" }); // Send the command to the server
                 byte[] pasvBuffer = new byte[0]; // Define the result buffer
                 if (ssl)
                 {
@@ -4364,12 +4385,14 @@ namespace NetLib
                         Array.ConstrainedCopy(data, 0, pasvBuffer, tmp.Length, data.Length); // Copy the received data
                         dataSocket.ForceStop();
                     });
+                    Debug($"[FL]: Read setup with TLS: done");
                 }
 
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new Exception("Failed to start the listing of the requested directory"); // Throw if unexpected status code
                 resp = GetResponse(); // Get the next response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new Exception("Failed to get the file list of the directory"); // Throw if unexpected status code
+                Debug($"[FL]: Transfer OK");
                 return pasvBuffer; // Return the result
             }
 
@@ -4410,6 +4433,7 @@ namespace NetLib
                 if (r.statusCode == Utils.FTP.StatusCode.ReadyNewUser) // Check th status code
                 {
                     ServerInformation = r.message; // Set the message of the server
+                    Debug($"[MOTD]: {ServerInformation}");
                 }
             }
 
@@ -4419,10 +4443,10 @@ namespace NetLib
             /// <param name="targetDirectory">The directory to change to</param>
             public void Cwd(string targetDirectory)
             {
-                string setWorkingDirectory = (new Utils.FTP.Request() { command = "CWD", arguments = targetDirectory }).ToString(); // Get the command to send
-                write.WriteLine(setWorkingDirectory); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "CWD", arguments = targetDirectory }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new Exception("Failed to change the working directory"); // Check if the status code is positive
+                Debug($"[WD]: Changed to {targetDirectory}");
             }
 
             /// <summary>
@@ -4431,14 +4455,14 @@ namespace NetLib
             /// <returns>The path of the current working directory</returns>
             public string Pwd()
             {
-                string getWorkingDirectory = (new Utils.FTP.Request() { command = "PWD", arguments = "" }).ToString(); // Get the command to send
-                write.WriteLine(getWorkingDirectory); // Send the command
+                ExecuteCommand(new Utils.FTP.Request() { command = "PWD", arguments = "" }); // Send the command to the server
                 Utils.FTP.Response resp = GetResponse(); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new Exception("Failed to get the current working directory"); // Check if the status code is positive
                 // Format and return the current path
                 int start = resp.message.IndexOf('\"') + 1; // Get the start of the substring
                 int end = resp.message.LastIndexOf('\"'); // Get the end of the substring
                 string wdir = resp.message.Substring(start, resp.message.Length - start - (resp.message.Length - end)); // Get the ip and the port string from the response
+                Debug($"[WD]: Currently: {wdir}");
                 return wdir; // Return the current working directory
             }
 
@@ -4453,17 +4477,19 @@ namespace NetLib
 #if Validation_hard
                 if (socket == null) throw new InvalidOperationException("Tried to login without connecting to the server"); // Check if the socket is alive
 #endif
-                string setUsername = (new Utils.FTP.Request() { command = "USER", arguments = user }).ToString(); // Get the username command
-                string setPassword = (new Utils.FTP.Request() { command = "PASS", arguments = pass }).ToString(); // Get the password command
-                write.WriteLine(setUsername); // Send the username
+                ExecuteCommand(new Utils.FTP.Request() { command = "USER", arguments = user }); // Send the command to the server
+                Debug($"[AUTH]: Username sent to server");
                 Utils.FTP.Response resp = GetResponse(); // Get the response from the server
                 if (resp.statusCode == Utils.FTP.StatusCode.SendPassword) // Check if we can send the username
                 {
-                    write.WriteLine(setPassword); // Send the password
+                    Debug($"[AUTH]: Allowed to send password");
+                    ExecuteCommand(new Utils.FTP.Request() { command = "PASS", arguments = pass }); // Send the command to the server
+                    Debug($"[AUTH]: Password sent to server");
                     resp = GetResponse(); // Get the response
                     return resp.statusCode == Utils.FTP.StatusCode.LoginSuccess; // Check if the login was successful
                 }
 
+                Debug($"[AUTH]: Couldn't send password after username");
                 return false; // Failed to login
             }
         }
