@@ -1805,7 +1805,7 @@ namespace NetLib
                 /// Demo only, this method doesn't provide security, only put in for demo purposes of custom encryption development
                 /// </summary>
                 /// <param name="xorKey">The byte to XOR the other bytes with</param>
-                /// <returns></returns>
+                /// <returns>The encrypt and decrypt function to use with the crypt augmentation</returns>
                 public static (CryptoFunction encrypt, CryptoFunction decrypt) GetXOR(int xorKey)
                 {
                     CryptoFunction enc = ((data) =>
@@ -1837,6 +1837,7 @@ namespace NetLib
                     return data;
                 }
             }
+
             /// <summary>
             /// Encrypt/Decrypt data
             /// </summary>
