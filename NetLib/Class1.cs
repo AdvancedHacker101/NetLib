@@ -15,6 +15,227 @@ using NetLib.Interfaces;
 namespace NetLib
 {
     /// <summary>
+    /// Class for sotring custom event handlers
+    /// </summary>
+    public class EventHandlers
+    {
+        /// <summary>
+        /// Bytes read from network event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The data read from the network</param>
+        public delegate void BytesReadEventHandler(object sender, EventArguments.BytesReadEventArgs e);
+        /// <summary>
+        /// String data read from the network event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The message data</param>
+        public delegate void StringReadEventHandler(object sender, EventArguments.StringReadEventArgs e);
+        /// <summary>
+        /// String read from multi socket server event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The client and message data</param>
+        public delegate void StringReadMultiEventHandler(object sender, EventArguments.StringReadMultiEventArgs e);
+        /// <summary>
+        /// Chat message send failure event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The message the client failed to send</param>
+        public delegate void ChatMessageFailEventHandler(object sender, EventArguments.ChatFailEventArgs e);
+        /// <summary>
+        /// Selected username taken event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The username that's taken</param>
+        public delegate void UsernameTakenEventHandler(object sender, EventArguments.UsernameTakenEventArgs e);
+        /// <summary>
+        /// Chat message received event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The message and the name of it's sender</param>
+        public delegate void ChatMessageReceivedEventHandler(object sender, EventArguments.ChatMessageReceivedEventArgs e);
+
+        /// <summary>
+        /// Client stopped event handler
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The event arguments</param>
+        public delegate void ClientStoppedEventHandler(object sender, EventArgs e);
+
+        /// <summary>
+        /// Bytes read from a multi socket server
+        /// </summary>
+        /// <param name="sender">The sender of the event</param>
+        /// <param name="e">The client ID which sent the message and the message</param>
+        public delegate void BytesReadMultiEventHandler(object sender, EventArguments.BytesReadMultiEventArgs e);
+    }
+
+    /// <summary>
+    /// Class for storing custom event arguments
+    /// </summary>
+    public class EventArguments
+    {
+        /// <summary>
+        /// Event arguments for bytes data received
+        /// </summary>
+        public class BytesReadEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new bytes received event argument
+            /// </summary>
+            /// <param name="byteData">The data the socket received</param>
+            public BytesReadEventArgs(byte[] byteData)
+            {
+                Bytes = byteData; // Set the data
+            }
+
+            /// <summary>
+            /// The data the socket read from the stream
+            /// </summary>
+            public byte[] Bytes { get; private set; }
+        }
+
+        /// <summary>
+        /// Event arguments for string data received
+        /// </summary>
+        public class StringReadEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new line received event arguments
+            /// </summary>
+            /// <param name="stringData">The new line received from the server</param>
+            public StringReadEventArgs(string stringData)
+            {
+                StringMessage = stringData; // Set the message
+            }
+
+            /// <summary>
+            /// The new line the socket read from the stream
+            /// </summary>
+            public string StringMessage { get; private set; }
+        }
+
+        /// <summary>
+        /// Event arguments for a multi socket server receiving string data
+        /// </summary>
+        public class BytesReadMultiEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new multi string read event arguments
+            /// </summary>
+            /// <param name="clientID">The ID of the client which sent the message</param>
+            /// <param name="byteData">The byte data the client sent</param>
+            public BytesReadMultiEventArgs(string clientID, byte[] byteData)
+            {
+                ClientID = clientID;
+                Bytes = byteData;
+            }
+
+            /// <summary>
+            /// The message the client sent
+            /// </summary>
+            public byte[] Bytes { get; private set; }
+            /// <summary>
+            /// The ID of the client which sent the message
+            /// </summary>
+            public string ClientID { get; private set; }
+        }
+
+        /// <summary>
+        /// Event arguments for the chat augmentation, when it fails at something
+        /// </summary>
+        public class ChatFailEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new chat fail event arguments
+            /// </summary>
+            /// <param name="msg">The message the augmentation failed to send</param>
+            public ChatFailEventArgs(string msg)
+            {
+                OriginalMessage = msg;
+            }
+
+            /// <summary>
+            /// The message the client couldn't send
+            /// </summary>
+            public string OriginalMessage { get; private set; }
+        }
+
+        /// <summary>
+        /// Event arguments for the chat augmentation, the username selected by the user if already taken
+        /// </summary>
+        public class UsernameTakenEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new username taken event arguments
+            /// </summary>
+            /// <param name="user">The username that's already taken</param>
+            public UsernameTakenEventArgs(string user)
+            {
+                Username = user;
+            }
+
+            /// <summary>
+            /// The username the user wanted, but is already taken
+            /// </summary>
+            public string Username { get; private set; }
+        }
+
+        /// <summary>
+        /// Message receive event arguments
+        /// </summary>
+        public class ChatMessageReceivedEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new event argument object
+            /// </summary>
+            /// <param name="msg">The message the client sent</param>
+            /// <param name="user">The name of the user who sent the message</param>
+            public ChatMessageReceivedEventArgs(string msg, string user)
+            {
+                Message = msg; // Set the message
+                Username = user; // Set the username
+            }
+
+            /// <summary>
+            /// The message the user sent
+            /// </summary>
+            public string Message { get; private set; }
+            /// <summary>
+            /// The name of the user who sent the message
+            /// </summary>
+            public string Username { get; private set; }
+        }
+
+        /// <summary>
+        /// Event arguments for a multi socket server receiving string data
+        /// </summary>
+        public class StringReadMultiEventArgs : EventArgs
+        {
+            /// <summary>
+            /// Create a new multi string read event arguments
+            /// </summary>
+            /// <param name="clientID">The ID of the client which sent the message</param>
+            /// <param name="stringMessage">The message the client sent</param>
+            public StringReadMultiEventArgs(string clientID, string stringMessage)
+            {
+                ClientID = clientID;
+                StringMessage = stringMessage;
+            }
+
+            /// <summary>
+            /// The message the client sent
+            /// </summary>
+            public string StringMessage { get; private set; }
+            /// <summary>
+            /// The ID of the client which sent the message
+            /// </summary>
+            public string ClientID { get; private set; }
+        }
+    }
+
+    /// <summary>
     /// A set of extension methods for simple tasks
     /// </summary>
     public static class Extensions
@@ -372,12 +593,12 @@ namespace NetLib
             /// Add an event listener for receiving bytes
             /// </summary>
             /// <param name="callback">The function to call when bytes are read</param>
-            void AddEventDataReceived(Action<byte[]> callback);
+            void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback);
             /// <summary>
             /// Add an event listener for receiving lines
             /// </summary>
             /// <param name="callback">The function to call when lines are received</param>
-            void AddEventLineReceived(Action<string> callback);
+            void AddEventLineReceived(EventHandlers.StringReadEventHandler callback);
             /// <summary>
             /// Read butes from the stream asnyc
             /// </summary>
@@ -478,13 +699,13 @@ namespace NetLib
             /// </summary>
             /// <param name="callback">The function to call when bytes are read</param>
             /// <param name="clientid">The ID of the client to add the event to</param>
-            void AddEventDataReceived(Action<byte[]> callback, string clientid);
+            void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback, string clientid);
             /// <summary>
             /// Add an event listener for receiving lines
             /// </summary>
             /// <param name="callback">The function to call when lines are received</param>
             /// <param name="clientid">The ID of the client to add the event to</param>
-            void AddEventLineReceived(Action<string> callback, string clientid);
+            void AddEventLineReceived(EventHandlers.StringReadEventHandler callback, string clientid);
             /// <summary>
             /// Read butes from the stream asnyc
             /// </summary>
@@ -662,11 +883,11 @@ namespace NetLib
             /// <summary>
             /// Event listener for when a new message is available
             /// </summary>
-            public event Action<string> OnDataRead;
+            public event EventHandlers.StringReadEventHandler OnDataRead;
             /// <summary>
             /// Event listener for when a new message on a multi socket server is available
             /// </summary>
-            public event Action<string, string> OnDataMultiRead;
+            public event EventHandlers.StringReadMultiEventHandler OnDataMultiRead;
             /// <summary>
             /// The separator used for splitting message content and header
             /// </summary>
@@ -803,14 +1024,15 @@ namespace NetLib
                 string fullString = ""; // The blob of the received messages from the client
                 int realLength = 0; // The length of the current message to parse
 
-                read.AddEventDataReceived((data) => // Check for new data
+                read.AddEventDataReceived((sender, ea) => // Check for new data
                 {
+                    byte[] data = ea.Bytes;
                     string msg = e.GetString(data); // Get the string message
                     fullString += msg; // Append it to the blob
                     for (int i = 0; i < 10; i++) // Spin 10 times, for larger network loads to clear
                     {
                         string result = ParseMessage(ref fullString, ref realLength); // Try to get the next message
-                        if (result != null) OnDataRead?.Invoke(result); // Signal the message
+                        if (result != null) OnDataRead?.Invoke(this, new EventArguments.StringReadEventArgs(result)); // Signal the message
                         else break; // No more full messages
                     }
                 });
@@ -825,14 +1047,15 @@ namespace NetLib
                 Encoding e = ((INetworkSocket)mRead).RecvEncoder; // Get the read encoding
                 string fullString = ""; // The blob of the receive message from the client
                 int realLength = 0; // The length of the current message to parse
-                mRead.AddEventDataReceived((data) => // Check for new data
+                mRead.AddEventDataReceived((s, ea) => // Check for new data
                 {
+                    byte[] data = ea.Bytes;
                     string msg = e.GetString(data); // Get the string message
                     fullString += msg; // Append it to the blob
                     for (int i = 0; i < 10; i++) // Spin 10 times, for larger network loads to clear
                     {
                         string result = ParseMessage(ref fullString, ref realLength); // Try to get the next message
-                        if (result != null) OnDataMultiRead?.Invoke(result, clientID); // Signal the message
+                        if (result != null) OnDataMultiRead?.Invoke(this, new EventArguments.StringReadMultiEventArgs(result, clientID)); // Signal the message
                         else break; // No more full messages
                     }
                 }, clientID);
@@ -844,32 +1067,6 @@ namespace NetLib
         /// </summary>
         public class Chat : Augmentation
         {
-            /// <summary>
-            /// Message receive event arguments
-            /// </summary>
-            public class MessageReceivedEventArgs
-            {
-                /// <summary>
-                /// Create a new event argument object
-                /// </summary>
-                /// <param name="msg">The message the client sent</param>
-                /// <param name="user">The name of the user who sent the message</param>
-                public MessageReceivedEventArgs(string msg, string user)
-                {
-                    Message = msg; // Set the message
-                    Username = user; // Set the username
-                }
-
-                /// <summary>
-                /// The message the user sent
-                /// </summary>
-                public string Message { get; private set; }
-                /// <summary>
-                /// The name of the user who sent the message
-                /// </summary>
-                public string Username { get; private set; }
-            }
-
             /// <summary>
             /// Instance of the server
             /// </summary>
@@ -893,19 +1090,19 @@ namespace NetLib
             /// <summary>
             /// Event listener for when failed to send a direct message
             /// </summary>
-            public event Action<string> DirectMessageFailed;
+            public event EventHandlers.ChatMessageFailEventHandler DirectMessageFailed;
             /// <summary>
             /// Event listener for when failed to broadcast a message
             /// </summary>
-            public event Action<string> BroadcastFailed;
+            public event EventHandlers.ChatMessageFailEventHandler BroadcastFailed;
             /// <summary>
             /// Event listener for when the selected username is already taken
             /// </summary>
-            public event Action<string> UsernameSelectionFailed;
+            public event EventHandlers.UsernameTakenEventHandler UsernameSelectionFailed;
             /// <summary>
             /// Event listener for when a new message is received
             /// </summary>
-            public event Action<MessageReceivedEventArgs> MessageReceived;
+            public event EventHandlers.ChatMessageReceivedEventHandler MessageReceived;
             /// <summary>
             /// The separator string to use with message headers
             /// </summary>
@@ -1042,8 +1239,10 @@ namespace NetLib
                 augmentable.InstallAugmentation(bi); // Install the augmentation
                 chatServer.AddEventClientConnected((id) => // Event: new client connected
                 {
-                    bi.OnDataMultiRead += (message, clientID) => // Event: client sent data
+                    bi.OnDataMultiRead += (eventSender, ea) => // Event: client sent data
                     {
+                        string clientID = ea.ClientID;
+                        string message = ea.StringMessage;
                         if (clientID != id) return; // If the client id's don't match -> return
 #if Logging_verbose
                         Console.WriteLine($"[{clientID}]: {message}"); // Debugging message
@@ -1113,30 +1312,31 @@ namespace NetLib
                 augmentable.InstallAugmentation(clientBI); // Install the augmentation to the client
                 if (userName == null) throw new InvalidOperationException("Can't start chatting without setting a username!"); // Check if the username is set
                 clientBI.SendData($"user-info{messageHeaderSeparator}{userName}"); // Set the username on the server
-                clientBI.OnDataRead += (message) => // Event: server sent data
+                clientBI.OnDataRead += (sender, ea) => // Event: server sent data
                 {
+                    string message = ea.StringMessage;
                     const string dmFailed = "dmfailed" + messageHeaderSeparator; // Direct messgae failed header
                     const string broadcastFailed = "broadcastfailed" + messageHeaderSeparator; // Broadcast failed header
                     const string usernameFailed = "userfailed" + messageHeaderSeparator; // Username set failed header
                     if (message.StartsWith(dmFailed)) // Check if a direct message failed
                     {
-                        DirectMessageFailed?.Invoke(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]); // Fire the event
+                        DirectMessageFailed?.Invoke(this, new EventArguments.ChatFailEventArgs(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1])); // Fire the event
                     }
                     else if (message.StartsWith(broadcastFailed)) // Check if a broadcast failed
                     {
-                        BroadcastFailed?.Invoke(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]); // Fire the event
+                        BroadcastFailed?.Invoke(this, new EventArguments.ChatFailEventArgs(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1])); // Fire the event
                     }
                     else if (message.StartsWith(usernameFailed)) // Check if the failed to set the username
                     {
-                        UsernameSelectionFailed?.Invoke(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1]); // Fire the event
+                        UsernameSelectionFailed?.Invoke(this, new EventArguments.UsernameTakenEventArgs(message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None)[1])); // Fire the event
                     }
                     else // Successful
                     {
                         string[] msgData = message.Split(new string[] { messageHeaderSeparator }, StringSplitOptions.None); // Get the contents of the message
                         string userName = msgData[0]; // Get the username
                         string msg = msgData[1]; // Get the message
-                        MessageReceivedEventArgs e = new MessageReceivedEventArgs(msg, userName); // Create the event data
-                        MessageReceived?.Invoke(e); // Invoke the event
+                        EventArguments.ChatMessageReceivedEventArgs e = new EventArguments.ChatMessageReceivedEventArgs(msg, userName); // Create the event data
+                        MessageReceived?.Invoke(this, e); // Invoke the event
                     }
                 };
                 clientBI.BeginReadData(); // Begin reading from the client
@@ -1170,7 +1370,7 @@ namespace NetLib
         /// <summary>
         /// Single Client Tcp Server
         /// </summary>
-        public class SingleTcpServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer, IAugmentable
+        public class SingleTcpServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer, IAugmentable, IDisposable
         {
             /// <summary>
             /// The socket of the server
@@ -1224,6 +1424,10 @@ namespace NetLib
             /// List of installed augmentations
             /// </summary>
             private List<Augmentation> augmentations = new List<Augmentation>();
+            /// <summary>
+            /// Indicates if the object is disposed
+            /// </summary>
+            private bool disposed = false;
 
             /// <summary>
             /// Init the server
@@ -1271,8 +1475,8 @@ namespace NetLib
                     client.RecvSize = RecvSize;
                     client.SendEncoder = SendEncoder;
                     client.WriteNewLine = WriteNewLine;
-                    client.AddEventClientStopped(() => { if (restartReading) Start(); });
-                    client.AddEventClientStopped(() => ClientDisconnected?.Invoke());
+                    client.AddEventClientStopped((s, ea) => { if (restartReading) Start(); });
+                    client.AddEventClientStopped((s, ea) => ClientDisconnected?.Invoke());
                     ClientConnected?.Invoke();
                 });
                 t.Start(); // Start listening
@@ -1338,7 +1542,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client is null
                 client.GracefulStop(); // Stop the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -1348,7 +1551,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client is null
                 client.ForceStop(); // Close the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -1357,8 +1559,6 @@ namespace NetLib
             private void ServerClose()
             {
                 serverSocket.Close(); // Close the server socket
-                serverSocket.Dispose(); // Dispose the server socket
-                serverSocket = null; // Reset the server socket
             }
 
             /// <summary>
@@ -1391,7 +1591,7 @@ namespace NetLib
             /// Add event listener for receiving bytes
             /// </summary>
             /// <param name="callback">The function to call when bytes are read from the stream</param>
-            public void AddEventDataReceived(Action<byte[]> callback)
+            public void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback)
             {
                 client.AddEventDataReceived(callback); // Use the wrapped client to listen for bytes
             }
@@ -1400,7 +1600,7 @@ namespace NetLib
             /// Add event listener for receiving new lines
             /// </summary>
             /// <param name="callback">The function to call when new lines are read from the stream</param>
-            public void AddEventLineReceived(Action<string> callback)
+            public void AddEventLineReceived(EventHandlers.StringReadEventHandler callback)
             {
                 client.AddEventLineReceived(callback); // Use the wrapped client to listen for new lines
             }
@@ -1485,12 +1685,58 @@ namespace NetLib
                 augmentation.OnUninstalled(); // Notify the augmentation of the installation
                 if (client != null) client.UninstallAugmentation(augmentation); // Proxy to the client
             }
+
+            /// <summary>
+            /// Dispose the object and release all resources
+            /// </summary>
+            public void Dispose()
+            {
+                Dispose(true); // Dispose object
+                GC.SuppressFinalize(this); // Suppress the finalizer call
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            /// <param name="disposing">True if called from dispose, false if called from finalizer</param>
+            protected virtual void Dispose(bool disposing)
+            {
+                if (disposed) return; // Don't dispose twice
+
+                if (disposing) // Check if we need to dispose managed resources
+                {
+                    try
+                    {
+                        if (!serverOffline)
+                        {
+                            ForceStop(); // Stop and dispose the server and the client 
+                        }
+                    }
+                    finally
+                    {
+                        if (client != null) client.Dispose(); // Dispose the client
+                        client = null; // Release client reference
+                        if (serverSocket != null) serverSocket.Dispose(); // Dispose server socket
+                        serverSocket = null; // Release server socket reference
+                    }
+                }
+
+                disposed = true; // Object disposed
+            }
+
+            /// <summary>
+            /// Finalizer for tcp server
+            /// </summary>
+            ~SingleTcpServer()
+            {
+                Dispose(false); // Dispose object
+            }
         }
 
         /// <summary>
         /// Single Client SSL Server
         /// </summary>
-        public class SingleSSLServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer, IAugmentable
+        public class SingleSSLServer : INetworkReader, INetworkWriter, INetworkSocket, INetworkServer, IAugmentable, IDisposable
         {
             /// <summary>
             /// The server socket
@@ -1548,6 +1794,10 @@ namespace NetLib
             /// A list to keep installed augmentations in
             /// </summary>
             private List<Augmentation> augmentations = new List<Augmentation>();
+            /// <summary>
+            /// Indicates if the object is disposed
+            /// </summary>
+            private bool disposed = false;
 
             /// <summary>
             /// Init the server
@@ -1718,7 +1968,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client's null
                 client.GracefulStop(); // Stop the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -1728,7 +1977,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client's null
                 client.ForceStop(); // Stop the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -1737,8 +1985,6 @@ namespace NetLib
             private void ServerClose()
             {
                 serverSocket.Close(); // Close the server socket
-                serverSocket.Dispose(); // Dispose the server socket
-                serverSocket = null; // Reset the server socket
             }
 
             /// <summary>
@@ -1771,7 +2017,7 @@ namespace NetLib
             /// Add event listener for reading bytes from the stream
             /// </summary>
             /// <param name="callback">The function to call when new bytes are read</param>
-            public void AddEventDataReceived(Action<byte[]> callback)
+            public void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback)
             {
                 client.AddEventDataReceived(callback); // Listen for bytes, using the wrapped client
             }
@@ -1780,7 +2026,7 @@ namespace NetLib
             /// Add event listener for reading new lines from the stream
             /// </summary>
             /// <param name="callback">The function to call when new line are read</param>
-            public void AddEventLineReceived(Action<string> callback)
+            public void AddEventLineReceived(EventHandlers.StringReadEventHandler callback)
             {
                 client.AddEventLineReceived(callback); // Listen for new lines using the wrapped client
             }
@@ -1856,12 +2102,57 @@ namespace NetLib
                 augmentation.OnUninstalled(); // Notify the augmentation of the installation
                 if (client != null) client.UninstallAugmentation(augmentation); // Proxy to the client
             }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            public void Dispose()
+            {
+                Dispose(true); // Dispose the object
+                GC.SuppressFinalize(this); // Don't call finalizer
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            /// <param name="disposing">True if called from dispose, false if called from finalizer</param>
+            protected virtual void Dispose(bool disposing)
+            {
+                if (disposed) return;
+
+                if (disposing)
+                {
+                    try
+                    {
+                        if (!serverOffline) ForceStop();
+                    }
+                    finally
+                    {
+                        // Dispose client
+                        client.Dispose();
+                        client = null;
+                        // Dispose server socket
+                        serverSocket?.Dispose();
+                        serverSocket = null;
+                    }
+                }
+
+                disposed = true;
+            }
+
+            /// <summary>
+            /// Object finalizer
+            /// </summary>
+            ~SingleSSLServer()
+            {
+                Dispose(false);
+            }
         }
 
         /// <summary>
         /// Multi socket Tcp Server
         /// </summary>
-        public class MultiTcpServer : INetworkMultiReader, INetworkMultiWriter, INetworkSocket, INetworkMultiServer, IAugmentable
+        public class MultiTcpServer : INetworkMultiReader, INetworkMultiWriter, INetworkSocket, INetworkMultiServer, IAugmentable, IDisposable
         {
             /// <summary>
             /// The socket of the server
@@ -1911,6 +2202,10 @@ namespace NetLib
             /// A list of installed augmentations
             /// </summary>
             private List<Augmentation> augmentations = new List<Augmentation>();
+            /// <summary>
+            /// Indicates if the object is diposed
+            /// </summary>
+            private bool disposed = false;
 
             /// <summary>
             /// Init the server
@@ -1977,7 +2272,7 @@ namespace NetLib
                         client.WriteNewLine = WriteNewLine;
                         // Add the client to the list
                         clients.Add((clientID, client));
-                        client.AddEventClientStopped(() => ClientDisconnected?.Invoke(clientID));
+                        client.AddEventClientStopped((s, ea) => ClientDisconnected?.Invoke(clientID));
                         ClientConnected?.Invoke(clientID); // Fire the connection event 
                     }
                 });
@@ -2089,7 +2384,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client is null
                 client.GracefulStop(); // Stop the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -2100,7 +2394,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client is null
                 client.ForceStop(); // Close the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -2109,8 +2402,6 @@ namespace NetLib
             private void ServerClose()
             {
                 serverSocket.Close(); // Close the server socket
-                serverSocket.Dispose(); // Dispose the server socket
-                serverSocket = null; // Reset the server socket
             }
 
             /// <summary>
@@ -2148,7 +2439,7 @@ namespace NetLib
             /// </summary>
             /// <param name="callback">The function to call when bytes are read from the stream</param>
             /// <param name="clientID">The ID of the client to read from</param>
-            public void AddEventDataReceived(Action<byte[]> callback, string clientID)
+            public void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback, string clientID)
             {
                 Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
@@ -2160,7 +2451,7 @@ namespace NetLib
             /// </summary>
             /// <param name="callback">The function to call when new lines are read from the stream</param>
             /// <param name="clientID">The ID of the client to read from</param>
-            public void AddEventLineReceived(Action<string> callback, string clientID)
+            public void AddEventLineReceived(EventHandlers.StringReadEventHandler callback, string clientID)
             {
                 Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
@@ -2253,12 +2544,64 @@ namespace NetLib
                     client.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
                 }
             }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            public void Dispose()
+            {
+                Dispose(true); // Dispose the object
+                GC.SuppressFinalize(this); // Don't call finalizer
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            /// <param name="disposing">True if called from dispose, false if called from finalizer</param>
+            protected virtual void Dispose(bool disposing)
+            {
+                if (disposed) return;
+
+                if (disposing)
+                {
+                    try
+                    {
+                        if (!serverOffline) ForceStop();
+                    }
+                    finally
+                    {
+                        // Dispose clients
+                        foreach (var (_, client) in clients)
+                        {
+                            client?.Dispose();
+                        }
+
+                        // Dispose server socket
+                        serverSocket?.Dispose();
+                        serverSocket = null;
+
+                        // Dispose the client list
+                        clients?.Clear();
+                        clients = null;
+                    }
+                }
+
+                disposed = true;
+            }
+
+            /// <summary>
+            /// Object finalizer
+            /// </summary>
+            ~MultiTcpServer()
+            {
+                Dispose(false);
+            }
         }
 
         /// <summary>
-        /// Multi socket Tcp Server
+        /// Multi socket SSL Server
         /// </summary>
-        public class MultiSSLServer : INetworkMultiReader, INetworkMultiWriter, INetworkSocket, INetworkMultiServer, IAugmentable
+        public class MultiSSLServer : INetworkMultiReader, INetworkMultiWriter, INetworkSocket, INetworkMultiServer, IAugmentable, IDisposable
         {
             /// <summary>
             /// The socket of the server
@@ -2312,6 +2655,10 @@ namespace NetLib
             /// The SSL Parameters of the server
             /// </summary>
             private Utils.SSL.ServerSSLData sslParams;
+            /// <summary>
+            /// Indicates if the object is disposed
+            /// </summary>
+            private bool disposed = false;
 
             /// <summary>
             /// Init the server
@@ -2519,7 +2866,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client is null
                 client.GracefulStop(); // Stop the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -2530,7 +2876,6 @@ namespace NetLib
             {
                 if (client == null) return; // Check if the client is null
                 client.ForceStop(); // Close the client
-                client = null; // Reset the client
             }
 
             /// <summary>
@@ -2539,8 +2884,6 @@ namespace NetLib
             private void ServerClose()
             {
                 serverSocket.Close(); // Close the server socket
-                serverSocket.Dispose(); // Dispose the server socket
-                serverSocket = null; // Reset the server socket
             }
 
             /// <summary>
@@ -2578,7 +2921,7 @@ namespace NetLib
             /// </summary>
             /// <param name="callback">The function to call when bytes are read from the stream</param>
             /// <param name="clientID">The ID of the client to read from</param>
-            public void AddEventDataReceived(Action<byte[]> callback, string clientID)
+            public void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback, string clientID)
             {
                 Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
@@ -2590,7 +2933,7 @@ namespace NetLib
             /// </summary>
             /// <param name="callback">The function to call when new lines are read from the stream</param>
             /// <param name="clientID">The ID of the client to read from</param>
-            public void AddEventLineReceived(Action<string> callback, string clientID)
+            public void AddEventLineReceived(EventHandlers.StringReadEventHandler callback, string clientID)
             {
                 Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) throw new InvalidOperationException("Your can't start reading from a non-existent client"); // Return if the client isn't found and error's suppressed
@@ -2683,6 +3026,58 @@ namespace NetLib
                     client.UninstallAugmentation(augmentation); // Uninstall the augmentation from the current client
                 }
             }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            public void Dispose()
+            {
+                Dispose(true); // Dispose the object
+                GC.SuppressFinalize(this); // Don't call finalizer
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            /// <param name="disposing">True if called from dispose, false if called from finalizer</param>
+            protected virtual void Dispose(bool disposing)
+            {
+                if (disposed) return;
+
+                if (disposing)
+                {
+                    try
+                    {
+                        if (!serverOffline) ForceStop();
+                    }
+                    finally
+                    {
+                        // Dispose clients
+                        foreach (var (_, client) in clients)
+                        {
+                            client?.Dispose();
+                        }
+
+                        // Dispose server socket
+                        serverSocket?.Dispose();
+                        serverSocket = null;
+
+                        // Dispose client list
+                        clients?.Clear();
+                        clients = null;
+                    }
+                }
+
+                disposed = true;
+            }
+
+            /// <summary>
+            /// Object finalizer
+            /// </summary>
+            ~MultiSSLServer()
+            {
+                Dispose(false);
+            }
         }
     }
 
@@ -2691,7 +3086,7 @@ namespace NetLib
         /// <summary>
         /// Basic TCP Client
         /// </summary>
-        public class TcpClient : INetworkReader, INetworkWriter, INetworkSocket, IAugmentable, INetworkClient
+        public class TcpClient : INetworkReader, INetworkWriter, INetworkSocket, IAugmentable, INetworkClient, IDisposable
         {
             /// <summary>
             /// The endpoint to connect to
@@ -2743,11 +3138,11 @@ namespace NetLib
             /// <summary>
             /// Event for receiving byte data
             /// </summary>
-            protected event Action<byte[]> DataReceived;
+            protected event EventHandlers.BytesReadEventHandler DataReceived;
             /// <summary>
             /// Event for receiving new lines
             /// </summary>
-            protected event Action<string> LineReceived;
+            protected event EventHandlers.StringReadEventHandler LineReceived;
             /// <summary>
             /// Enabled receive events
             /// </summary>
@@ -2759,7 +3154,7 @@ namespace NetLib
             /// <summary>
             /// Event for client disconnect notifications
             /// </summary>
-            protected event Action ClientStopped;
+            protected event EventHandlers.ClientStoppedEventHandler ClientStopped;
             /// <summary>
             /// A list of installed augmentations
             /// </summary>
@@ -2768,6 +3163,10 @@ namespace NetLib
             /// Indicates if a server socket created this client
             /// </summary>
             protected bool fromServer = false;
+            /// <summary>
+            /// Indicates if the object is disposed
+            /// </summary>
+            private bool disposed = false;
 
             /// <summary>
             /// Init the client
@@ -2991,7 +3390,7 @@ namespace NetLib
                     {
                         augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
                         augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentation inspect the data
-                        DataReceived?.Invoke(dataBuffer); // Invoke the data received event
+                        DataReceived?.Invoke(this, new EventArguments.BytesReadEventArgs(dataBuffer)); // Invoke the data received event
                     }
 
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
@@ -3003,7 +3402,7 @@ namespace NetLib
                             string res = readObject.lineRecvResult.ToString();
                             augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
                             augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
-                            LineReceived?.Invoke(res); // Invoke the callback
+                            LineReceived?.Invoke(this, new EventArguments.StringReadEventArgs(res)); // Invoke the callback
                             readObject.lineRecvResult.Clear(); // Clear out the string buffer
                         }
                     }
@@ -3025,7 +3424,7 @@ namespace NetLib
             /// Add an event listener for receiving bytes from the stream
             /// </summary>
             /// <param name="callback">The function to call when new bytes are available</param>
-            public void AddEventDataReceived(Action<byte[]> callback)
+            public void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback)
             {
                 DataReceived += callback; // Add the function to the event
                 StartCallbackRead(Utils.NetworkIO.ReadEventCodes.DataRecv); // Start the callback
@@ -3035,7 +3434,7 @@ namespace NetLib
             /// Add an event listener for receiving new lines from the stream
             /// </summary>
             /// <param name="callback">The function to call when new lines are available</param>
-            public void AddEventLineReceived(Action<string> callback)
+            public void AddEventLineReceived(EventHandlers.StringReadEventHandler callback)
             {
                 LineReceived += callback; // Add the function to the event
                 StartCallbackRead(Utils.NetworkIO.ReadEventCodes.LineRecv); // Enable the callback
@@ -3045,7 +3444,7 @@ namespace NetLib
             /// Add an event listener for when the client is stopped
             /// </summary>
             /// <param name="callback">The function to call when the client is disconnected</param>
-            public void AddEventClientStopped(Action callback)
+            public void AddEventClientStopped(EventHandlers.ClientStoppedEventHandler callback)
             {
                 ClientStopped += callback; // Add the function to the event
             }
@@ -3064,10 +3463,8 @@ namespace NetLib
                 client.Shutdown(SocketShutdown.Both); // Shutdown read and write sockets
                 client.Disconnect(false); // Disconnect from the server
                 client.Close(); // Close the client
-                client.Dispose(); // Dispose the client
-                client = null; // Reset the client
                 clientOffline = true; // The client isn't running
-                ClientStopped?.Invoke(); // Invoke the client stopped event
+                ClientStopped?.Invoke(this, new EventArgs()); // Invoke the client stopped event
             }
 
             /// <summary>
@@ -3081,10 +3478,8 @@ namespace NetLib
                 if (client == null) throw new InvalidOperationException("Cannot close an offline client"); // Client isn't running
 #endif
                 client.Close(); // Close the client
-                client.Dispose(); // Dispose the client
-                client = null; // Reset the client
                 clientOffline = true; // The client isn't running
-                ClientStopped?.Invoke(); // Invoke the client stopped event
+                ClientStopped?.Invoke(this, new EventArgs()); // Invoke the client stopped event
             }
 
             /// <summary>
@@ -3165,15 +3560,57 @@ namespace NetLib
             {
                 NetworkStream ns = new NetworkStream(client); // Get the network stream of the client
                 ns.Close(); // Close the stream
-                ns.Dispose(); // Release resources
-                ns = null; // Relese reference
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            public void Dispose()
+            {
+                Dispose(true); // Dispose the object
+                GC.SuppressFinalize(this); // Don't call finalizer
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            /// <param name="disposing">True if called from dispose, false if called from finalizer</param>
+            protected virtual void Dispose(bool disposing)
+            {
+                if (disposed) return; // Don't dispose twice
+
+                if (disposing)
+                {
+                    try
+                    {
+                        if (!clientOffline)
+                        {
+                            ForceStop(); // Try stopping the client, then dispose it 
+                        }
+                    }
+                    finally
+                    {
+                        if (client != null) client.Dispose(); // Dispose the client
+                        client = null; // Release the client reference
+                    }
+                }
+
+                disposed = true; // Object disposed
+            }
+
+            /// <summary>
+            /// Finalize the object
+            /// </summary>
+            ~TcpClient()
+            {
+                Dispose(false); // Call dispose
             }
         }
 
         /// <summary>
         /// SSL Network Client
         /// </summary>
-        public class SSLClient : INetworkSocket, INetworkReader, INetworkWriter, INetworkClient, IAugmentable
+        public class SSLClient : INetworkSocket, INetworkReader, INetworkWriter, INetworkClient, IAugmentable, IDisposable
         {
             /// <summary>
             /// The endpoint to connect to
@@ -3225,11 +3662,11 @@ namespace NetLib
             /// <summary>
             /// Event for receiving byte data
             /// </summary>
-            private event Action<byte[]> DataReceived;
+            private event EventHandlers.BytesReadEventHandler DataReceived;
             /// <summary>
             /// Event for receiving new lines
             /// </summary>
-            private event Action<string> LineReceived;
+            private event EventHandlers.StringReadEventHandler LineReceived;
             /// <summary>
             /// Enabled receive events
             /// </summary>
@@ -3262,6 +3699,10 @@ namespace NetLib
             /// The domain or address of the server to connect to
             /// </summary>
             private string serverDestination;
+            /// <summary>
+            /// Indicates if the object is disposed
+            /// </summary>
+            private bool disposed = false;
 
             /// <summary>
             /// Init the clinet
@@ -3429,7 +3870,7 @@ namespace NetLib
                     {
                         augmentations.ForEach((aug) => dataBuffer = aug.OnBeforeReceiveBytes(dataBuffer)); // Let the augmentations modify the data
                         augmentations.ForEach((aug) => aug.OnAfterReceiveBytes(dataBuffer)); // Let the augmentations inspect the data
-                        DataReceived?.Invoke(dataBuffer); // Invoke the data received event
+                        DataReceived?.Invoke(this, new EventArguments.BytesReadEventArgs(dataBuffer)); // Invoke the data received event
                     }
 
                     if (receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.Both || receiveCallbackMode == Utils.NetworkIO.ReadEventCodes.LineRecv) // Invoke the line received event
@@ -3441,7 +3882,7 @@ namespace NetLib
                             string res = readObject.lineRecvResult.ToString(); // Get the resulting string
                             augmentations.ForEach((aug) => res = aug.OnBeforeReceiveString(res, RecvEncoder)); // Let the augmentations modify the data
                             augmentations.ForEach((aug) => aug.OnAfterReceiveString(res, RecvEncoder)); // Let the augmentations inspect the data
-                            LineReceived?.Invoke(res); // Invoke the new line event
+                            LineReceived?.Invoke(this, new EventArguments.StringReadEventArgs(res)); // Invoke the new line event
                             readObject.lineRecvResult.Clear(); // Clear the string buffer
                         }
                     }
@@ -3470,8 +3911,6 @@ namespace NetLib
                 if (client == null) throw new InvalidOperationException("Cannot close an offline client"); // Client isn't running
 #endif
                 client.Close(); // Close the client
-                client.Dispose(); // Dispose the client
-                client = null; // Reset the client
                 clientOffline = true; // The client isn't running
                 ClientStopped?.Invoke(); // Invoke the client stopped event
             }
@@ -3489,7 +3928,7 @@ namespace NetLib
             /// Add an event listener for when new bytes are available
             /// </summary>
             /// <param name="callback">The function to call when new bytes are available</param>
-            public void AddEventDataReceived(Action<byte[]> callback)
+            public void AddEventDataReceived(EventHandlers.BytesReadEventHandler callback)
             {
                 DataReceived += callback; // Add the function to the event
                 StartCallbackRead(Utils.NetworkIO.ReadEventCodes.DataRecv); // Start the callback
@@ -3499,7 +3938,7 @@ namespace NetLib
             /// Add and event listener for when new lines are available
             /// </summary>
             /// <param name="callback">The function to call when new lines are available</param>
-            public void AddEventLineReceived(Action<string> callback)
+            public void AddEventLineReceived(EventHandlers.StringReadEventHandler callback)
             {
                 LineReceived += callback; // Add the function to the event
                 StartCallbackRead(Utils.NetworkIO.ReadEventCodes.LineRecv); // Enable the callback
@@ -3649,8 +4088,6 @@ namespace NetLib
                 if (sslStream != null)
                 {
                     sslStream.Close(); // Close the stream
-                    sslStream.Dispose(); // Dispose the stream
-                    sslStream = null; // Reset the steam 
                 }
                 if (!fromServer) augmentations.ForEach((aug) => aug.OnStop()); // Signal the stop event to the augmentations if we're not created from server
                 if (clientOffline) return; // Return if the client isn't running
@@ -3661,8 +4098,6 @@ namespace NetLib
                 client.Shutdown(SocketShutdown.Both); // Shutdown read and write sockets
                 client.Disconnect(false); // Disconnect from the server
                 client.Close(); // Close the client
-                client.Dispose(); // Dispose the client
-                client = null; // Reset the client
                 clientOffline = true; // The client isn't running
                 ClientStopped?.Invoke(); // Invoke the client stopped event
             }
@@ -3706,6 +4141,52 @@ namespace NetLib
                 sslStream.Close(); // Close the stream
                 sslStream.Dispose(); // Release resources
                 sslStream = null; // Relese reference
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            public void Dispose()
+            {
+                Dispose(true); // Dispose the object
+                GC.SuppressFinalize(this); // Don't call finalizer
+            }
+
+            /// <summary>
+            /// Dispose the object
+            /// </summary>
+            /// <param name="disposing">True if called from dispose, false if called from finalizer</param>
+            protected virtual void Dispose(bool disposing)
+            {
+                if (disposed) return;
+
+                if (disposing)
+                {
+                    try
+                    {
+                        if (!clientOffline)
+                        {
+                            ForceStop(); // Stop client, then dispose 
+                        }
+                    }
+                    finally
+                    {
+                        if (sslStream != null) sslStream.Dispose(); // Dispose the ssl stream
+                        sslStream = null; // Release ssl stream reference
+                        if (client != null) client.Dispose(); // Dispose the client
+                        client = null; // Release client reference
+                    }
+                }
+
+                disposed = true;
+            }
+
+            /// <summary>
+            /// Object finalizer
+            /// </summary>
+            ~SSLClient()
+            {
+                Dispose(false);
             }
         }
 
@@ -4319,8 +4800,9 @@ namespace NetLib
                 if (!ssl)
                 {
                     var (_read, _, _) = ConnectDataPort(dataPort, ssl);
-                    _read.AddEventDataReceived((data) => // When new data received
+                    _read.AddEventDataReceived((sender, ea) => // When new data received
                     {
+                        byte[] data = ea.Bytes;
                         int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
                         byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
                         Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
@@ -4349,8 +4831,9 @@ namespace NetLib
                 if (ssl)
                 {
                     var (_read, _, _) = ConnectDataPort(dPort, ssl); // Connect to the data port
-                    _read.AddEventDataReceived((data) => // When new data received
+                    _read.AddEventDataReceived((sender, ea) => // When new data received
                     {
+                        byte[] data = ea.Bytes;
                         int newLength = pasvBuffer.Length + data.Length; // Get the new length of the buffer
                         byte[] tmp = new byte[pasvBuffer.Length]; // Init a temporary save buffer
                         Array.Copy(pasvBuffer, tmp, pasvBuffer.Length); // Save the current buffer
