@@ -11,6 +11,8 @@ using System.Net.Sockets; // Sockets
 using System.Security.Cryptography.X509Certificates; // Certificate parsing
 using System.Collections.Generic;
 using NetLib.Interfaces;
+using System.Security.Cryptography;
+using System.IO;
 
 namespace NetLib
 {
@@ -1363,6 +1365,532 @@ namespace NetLib
                 clientBI.SendData($"dm{messageHeaderSeparator}{username}{messageHeaderSeparator}{message}"); // Broadcast the message
             }
         }
+
+        /// <summary>
+        /// Base64 encodes outgoing data, decodes incoming data
+        /// </summary>
+        public class Base64 : Augmentation
+        {
+            /// <summary>
+            /// Create a new base64 stream encoder
+            /// </summary>
+            public Base64()
+            {
+                disableConsole = true;
+            }
+
+            /// <summary>
+            /// Base64 encodes string data
+            /// </summary>
+            /// <param name="data">The string message</param>
+            /// <param name="encoding">The encoding of the message</param>
+            /// <returns>The encoded message</returns>
+            public override string OnBeforeSendString(string data, Encoding encoding)
+            {
+                return Convert.ToBase64String(encoding.GetBytes(data));
+            }
+
+            /// <summary>
+            /// Base64 Decodes string data
+            /// </summary>
+            /// <param name="data">The string message</param>
+            /// <param name="encoding">The encoding of the message</param>
+            /// <returns>The base64 decoded string</returns>
+            public override string OnBeforeReceiveString(string data, Encoding encoding)
+            {
+                return encoding.GetString(Convert.FromBase64String(data));
+            }
+        }
+
+        /// <summary>
+        /// Compress byte data before sending, decompress after receiving
+        /// </summary>
+        public class Compression : Augmentation
+        {
+            /// <summary>
+            /// The compression to use
+            /// </summary>
+            private readonly Type mode;
+
+            /// <summary>
+            /// Defined the type of the compression
+            /// </summary>
+            public enum Type
+            {
+                /// <summary>
+                /// Compress with deflate
+                /// </summary>
+                Deflate,
+                /// <summary>
+                /// Compress with GZIP
+                /// </summary>
+                GZIP
+            }
+
+            /// <summary>
+            /// How many bytes were saved from sending/receiving by using compression
+            /// </summary>
+            public int BytesSaved { get; private set; }
+
+            /// <summary>
+            /// Create a new compression object
+            /// </summary>
+            /// <param name="compressionType">The compression to use</param>
+            public Compression(Type compressionType)
+            {
+                disableConsole = true;
+                mode = compressionType;
+            }
+
+            /// <summary>
+            /// Test the compression locally
+            /// </summary>
+            /// <param name="data">The data to compress</param>
+            /// <returns>Hopefully the same array as given</returns>
+            public byte[] Test(byte[] data)
+            {
+                if (mode == Type.GZIP) return DecodeGzip(EncodeGzip(data)); // Test gzip
+                else return DecodeDeflate(EncodeDeflate(data)); // Test deflate
+            }
+
+            /// <summary>
+            /// Compress data before sending
+            /// </summary>
+            /// <param name="data">The array to compress</param>
+            /// <param name="offset">The offset to start compressing from</param>
+            /// <param name="length">The number of bytes to compress</param>
+            /// <returns>The compressed byte array, offset, and it's length</returns>
+            public override (byte[] data, int offset, int length) OnBeforeSendBytes(byte[] data, int offset, int length)
+            {
+                try
+                {
+                    byte[] toEncode = new byte[length]; // Define array to compress
+                    Array.ConstrainedCopy(data, offset, toEncode, 0, length); // Copy data from the source array
+                    byte[] encoded = null; // Define array to return
+
+                    if (mode == Type.Deflate) // Use deflate
+                    {
+                        encoded = EncodeDeflate(toEncode); // Compress array
+                    }
+                    else // use gzip
+                    {
+                        encoded = EncodeGzip(toEncode); // Compress array
+                    }
+
+                    BytesSaved += length - encoded.Length; // Calculate the saved bytes
+
+                    return (encoded, 0, encoded.Length); // Return the compressed array
+                }
+                catch (Exception ex) // Compression failed
+                {
+                    throw new Exception("Failed to compress data!", ex);
+                }
+            }
+
+            /// <summary>
+            /// Decompress data after reading
+            /// </summary>
+            /// <param name="data">The data to decompress</param>
+            /// <returns>The decompressed array</returns>
+            public override byte[] OnBeforeReceiveBytes(byte[] data)
+            {
+                try
+                {
+                    byte[] decoded = null; // Define array to return
+
+                    if (mode == Type.Deflate) // Use deflate
+                    {
+                        decoded = DecodeDeflate(data); // Decompress array
+                    }
+                    else // use gzip
+                    {
+                        decoded = DecodeGzip(data); // Decompress array
+                    }
+
+                    BytesSaved += decoded.Length - data.Length;
+
+                    return decoded; // Return the compressed array
+                }
+                catch (Exception ex) // Decompression failed
+                {
+                    throw new Exception("Failed to compress data!", ex);
+                }
+            }
+
+            // gzip and deflate compression from:
+            // https://github.com/AdvancedHacker101/C-Sharp-Proxy-Server/blob/master/proxyServer/Form1.cs#L5473
+
+            /// <summary>
+            /// Compress a byte array with deflate
+            /// </summary>
+            /// <param name="plainData">The data to compress</param>
+            /// <returns>The compressed array of bytes</returns>
+            private byte[] EncodeDeflate(byte[] plainData)
+            {
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    using (System.IO.Compression.DeflateStream deflate = new System.IO.Compression.DeflateStream(ms, System.IO.Compression.CompressionMode.Compress, true))
+                    {
+                        deflate.Write(plainData, 0, plainData.Length);
+                    }
+                    return ms.ToArray();
+                }
+            }
+
+            /// <summary>
+            /// Decompress a deflate compressed array
+            /// </summary>
+            /// <param name="deflateData">The data to decompress</param>
+            /// <returns>The decompressed data</returns>
+            private byte[] DecodeDeflate(byte[] deflateData)
+            {
+                byte[] bytes = new byte[4096];
+                byte[] decoded;
+
+                using (System.IO.Compression.DeflateStream stream = new System.IO.Compression.DeflateStream(new MemoryStream(deflateData), System.IO.Compression.CompressionMode.Decompress))
+                {
+                    using (MemoryStream memory = new MemoryStream())
+                    {
+                        int count = 0;
+                        do
+                        {
+                            count = stream.Read(bytes, 0, 4096);
+                            if (count > 0)
+                            {
+                                memory.Write(bytes, 0, count);
+                            }
+                        }
+                        while (count > 0);
+                        decoded = memory.ToArray();
+                    }
+                }
+
+                return decoded;
+            }
+
+            /// <summary>
+            /// Compress a byte array with GZIP
+            /// </summary>
+            /// <param name="gzipData">The array to compress with GZIP</param>
+            /// <returns>The GZIP compressed array</returns>
+            private byte[] EncodeGzip(byte[] gzipData)
+            {
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    using (System.IO.Compression.GZipStream gzip = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionMode.Compress, true))
+                    {
+                        gzip.Write(gzipData, 0, gzipData.Length);
+                    }
+                    return ms.ToArray();
+                }
+            }
+
+            /// <summary>
+            /// Decompress a byte array with GZIP
+            /// </summary>
+            /// <param name="gzipData">The array to decompress with GZIP</param>
+            /// <returns>The GZIP decompressed array</returns>
+            private byte[] DecodeGzip(byte[] gzipData)
+            {
+                byte[] bytes = new byte[4096];
+                byte[] decoded;
+
+                using (System.IO.Compression.GZipStream stream = new System.IO.Compression.GZipStream(new MemoryStream(gzipData), System.IO.Compression.CompressionMode.Decompress))
+                {
+                    using (MemoryStream memory = new MemoryStream())
+                    {
+                        int count = 0;
+                        do
+                        {
+                            count = stream.Read(bytes, 0, 4096);
+                            if (count > 0)
+                            {
+                                memory.Write(bytes, 0, count);
+                            }
+                        }
+                        while (count > 0);
+                        decoded = memory.ToArray();
+                    }
+                }
+
+                return decoded;
+            }
+        }
+
+        /// <summary>
+        /// Encrypt decrypt data with custom functions
+        /// </summary>
+        public class Crypt : Augmentation
+        {
+            /// <summary>
+            /// Collection of common crypto functions
+            /// </summary>
+            public class FunctionBuilder
+            {
+                /// <summary>
+                /// Create general AES crypto functions
+                /// </summary>
+                /// <param name="pw">The password to encrypt with (client/server has to match)</param>
+                /// <returns>The encrypt and decrypt function to use with the crypt augmentation</returns>
+                public static (CryptoFunction encrypt, CryptoFunction decrypt) GetAES(string pw)
+                {
+                    byte[] salt = GetRandomBytes(16);
+
+                    CryptoFunction enc = ((data) =>
+                    {
+                        byte[] finalResult;
+                        // Utilizes helper function to generate random 16 byte salt using RNG
+
+                        // Convert plain text to bytes
+
+                        // create new password derived bytes using password/salt
+                        using (Rfc2898DeriveBytes pdb = new Rfc2898DeriveBytes(pw, salt))
+                        {
+                            using (Aes aes = Aes.Create())
+                            {
+                                // Generate key and iv from password/salt and pass to aes
+                                aes.Key = pdb.GetBytes(aes.KeySize / 8);
+                                aes.IV = pdb.GetBytes(aes.BlockSize / 8);
+
+                                // Open a new memory stream to write the encrypted data to
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    // Create a crypto stream to perform encryption
+                                    using (CryptoStream cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+                                    {
+                                        // write encrypted bytes to memory
+                                        cs.Write(data, 0, data.Length);
+                                    }
+                                    // get the cipher bytes from memory
+                                    byte[] cipherBytes = ms.ToArray();
+                                    // create a new byte array to hold salt + cipher
+                                    byte[] saltedCipherBytes = new byte[salt.Length + cipherBytes.Length];
+                                    // copy salt + cipher to new array
+                                    Array.Copy(salt, 0, saltedCipherBytes, 0, salt.Length);
+                                    Array.Copy(cipherBytes, 0, saltedCipherBytes, salt.Length, cipherBytes.Length);
+                                    // convert cipher array to base 64 string
+                                    finalResult = saltedCipherBytes;
+                                }
+                                aes.Clear();
+                            }
+                        }
+                        return finalResult;
+                    });
+
+                    CryptoFunction dec = ((data) =>
+                    {
+                        byte[] result = new byte[2048];
+                        byte[] _salt = new byte[16];
+                        byte[] toDecrypt = new byte[data.Length - 16];
+                        Array.Copy(data, 0, _salt, 0, 16);
+                        Array.Copy(data, 16, toDecrypt, 0, data.Length - 16);
+
+                        using (Rfc2898DeriveBytes pdb = new Rfc2898DeriveBytes(pw, _salt))
+                        {
+                            using (Aes aes = Aes.Create())
+                            {
+                                // Generate key and iv from password/salt and pass to aes
+                                aes.Key = pdb.GetBytes(aes.KeySize / 8);
+                                aes.IV = pdb.GetBytes(aes.BlockSize / 8);
+
+                                // Open a new memory stream to write the encrypted data to
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    // Create a crypto stream to perform decryption
+                                    using (CryptoStream cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Write))
+                                    {
+                                        // write decrypted data to memory
+                                        cs.Write(toDecrypt, 0, toDecrypt.Length);
+                                    }
+                                    // convert decrypted array to plain text string
+                                    result = ms.ToArray();
+                                }
+                                aes.Clear();
+                            }
+                        }
+                        return result;
+                    });
+
+                    return (enc, dec);
+                }
+
+                /// <summary>
+                /// Create general 3DES crypto functions
+                /// </summary>
+                /// <param name="pw">The password to encrypt with (client/server has to match)</param>
+                /// <returns>The encrypt and decrypt function to use with the crypt augmentation</returns>
+                public static (CryptoFunction encrypt, CryptoFunction decrypt) Get3DES(string pw)
+                {
+                    byte[] salt = GetRandomBytes(16);
+
+                    CryptoFunction enc = ((data) =>
+                    {
+                        byte[] finalResult;
+                        // Utilizes helper function to generate random 16 byte salt using RNG
+
+                        // Convert plain text to bytes
+
+                        // create new password derived bytes using password/salt
+                        using (Rfc2898DeriveBytes pdb = new Rfc2898DeriveBytes(pw, salt))
+                        {
+                            using (TripleDES tripleDES = TripleDES.Create())
+                            {
+                                // Generate key and iv from password/salt and pass to aes
+                                tripleDES.Key = pdb.GetBytes(tripleDES.KeySize / 8);
+                                tripleDES.IV = pdb.GetBytes(tripleDES.BlockSize / 8);
+
+                                // Open a new memory stream to write the encrypted data to
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    // Create a crypto stream to perform encryption
+                                    using (CryptoStream cs = new CryptoStream(ms, tripleDES.CreateEncryptor(), CryptoStreamMode.Write))
+                                    {
+                                        // write encrypted bytes to memory
+                                        cs.Write(data, 0, data.Length);
+                                    }
+                                    // get the cipher bytes from memory
+                                    byte[] cipherBytes = ms.ToArray();
+                                    // create a new byte array to hold salt + cipher
+                                    byte[] saltedCipherBytes = new byte[salt.Length + cipherBytes.Length];
+                                    // copy salt + cipher to new array
+                                    Array.Copy(salt, 0, saltedCipherBytes, 0, salt.Length);
+                                    Array.Copy(cipherBytes, 0, saltedCipherBytes, salt.Length, cipherBytes.Length);
+                                    // convert cipher array to base 64 string
+                                    finalResult = saltedCipherBytes;
+                                }
+                                tripleDES.Clear();
+                            }
+                        }
+                        return finalResult;
+                    });
+
+                    CryptoFunction dec = ((data) =>
+                    {
+                        byte[] result = new byte[2048];
+                        byte[] _salt = new byte[16];
+                        byte[] toDecrypt = new byte[data.Length - 16];
+                        Array.Copy(data, 0, _salt, 0, 16);
+                        Array.Copy(data, 16, toDecrypt, 0, data.Length - 16);
+
+                        using (Rfc2898DeriveBytes pdb = new Rfc2898DeriveBytes(pw, _salt))
+                        {
+                            using (TripleDES tripleDES = TripleDES.Create())
+                            {
+                                // Generate key and iv from password/salt and pass to aes
+                                tripleDES.Key = pdb.GetBytes(tripleDES.KeySize / 8);
+                                tripleDES.IV = pdb.GetBytes(tripleDES.BlockSize / 8);
+
+                                // Open a new memory stream to write the encrypted data to
+                                using (MemoryStream ms = new MemoryStream())
+                                {
+                                    // Create a crypto stream to perform decryption
+                                    using (CryptoStream cs = new CryptoStream(ms, tripleDES.CreateDecryptor(), CryptoStreamMode.Write))
+                                    {
+                                        // write decrypted data to memory
+                                        cs.Write(toDecrypt, 0, toDecrypt.Length);
+                                    }
+                                    // convert decrypted array to plain text string
+                                    result = ms.ToArray();
+                                }
+                                tripleDES.Clear();
+                            }
+                        }
+                        return result;
+                    });
+
+                    return (enc, dec);
+                }
+
+                /// <summary>
+                /// Demo only, this method doesn't provide security, only put in for demo purposes of custom encryption development
+                /// </summary>
+                /// <param name="xorKey">The byte to XOR the other bytes with</param>
+                /// <returns></returns>
+                public static (CryptoFunction encrypt, CryptoFunction decrypt) GetXOR(int xorKey)
+                {
+                    CryptoFunction enc = ((data) =>
+                    {
+                        for (int i = 0; i < data.Length; i++)
+                        {
+                            int current = data[i];
+                            data[i] = (byte)(current ^ xorKey);
+                        }
+
+                        return data;
+                    });
+
+                    return (enc, enc);
+                }
+
+                /// <summary>
+                /// Generate random byte arrays
+                /// </summary>
+                /// <param name="vLength">The length of the random byte array</param>
+                /// <returns>The random byte array</returns>
+                private static byte[] GetRandomBytes(int vLength)
+                {
+                    byte[] data = new byte[vLength];
+                    using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+                    {
+                        rng.GetBytes(data);
+                    }
+                    return data;
+                }
+            }
+            /// <summary>
+            /// Encrypt/Decrypt data
+            /// </summary>
+            /// <param name="data">The data to encrypt/decrypt</param>
+            /// <returns>The encrypted/decrypted data</returns>
+            public delegate byte[] CryptoFunction(byte[] data);
+            /// <summary>
+            /// Function to encrypt data with
+            /// </summary>
+            private readonly CryptoFunction enc;
+            /// <summary>
+            /// Function to decrypt data with
+            /// </summary>
+            private readonly CryptoFunction dec;
+
+            /// <summary>
+            /// Create a new crypt augmentation
+            /// </summary>
+            /// <param name="encrypt">The function to encrypt data with</param>
+            /// <param name="decrypt">The function to decrypt data with</param>
+            public Crypt(CryptoFunction encrypt, CryptoFunction decrypt)
+            {
+                disableConsole = true;
+                // Set the crypt functions
+                enc = encrypt;
+                dec = decrypt;
+            }
+
+            /// <summary>
+            /// Encrypt and outgoing byte data
+            /// </summary>
+            /// <param name="data">The data to encrypt</param>
+            /// <param name="offset">The offset to start encrypting from</param>
+            /// <param name="length">The number of bytes to encrypt</param>
+            /// <returns>The encrypted data</returns>
+            public override (byte[] data, int offset, int length) OnBeforeSendBytes(byte[] data, int offset, int length)
+            {
+                byte[] encrypt = new byte[length]; // Define the data to encrypt
+                Array.ConstrainedCopy(data, offset, encrypt, 0, length); // Get the data to encrypt
+                byte[] crypted = enc(encrypt); // Encrypt the data
+                return (crypted, 0, crypted.Length); // Return the encrypted data
+            }
+
+            /// <summary>
+            /// Decrypt incoming byte data
+            /// </summary>
+            /// <param name="data">The data to decrypt</param>
+            /// <returns>The decrypted data</returns>
+            public override byte[] OnBeforeReceiveBytes(byte[] data)
+            {
+                return dec(data); // Decrypt the data and return it
+            }
+
+        }
     }
 
     namespace Servers
@@ -1642,8 +2170,8 @@ namespace NetLib
             /// <param name="data">The line to write to the stream</param>
             public void WriteLine(string data)
             {
-                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
-                DirectWrite(buffer); // Write the bytes to the stream
+                WaitForClient(); // Wait for a connection
+                client.WriteLine(data); // Write the new line to the stream
             }
 
             /// <summary>
@@ -2068,8 +2596,8 @@ namespace NetLib
             /// <param name="data">The new line to write</param>
             public void WriteLine(string data)
             {
-                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the line terminator to a byte array
-                DirectWrite(buffer); // Send bytes to the stream
+                WaitForClient(); // Wait for a connection
+                client.WriteLine(data); // Write the new line to the stream
             }
 
             /// <summary>
@@ -2502,8 +3030,7 @@ namespace NetLib
             {
                 Clients.TcpClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) return; // Check if the client is null
-                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
-                DirectWrite(buffer, clientID); // Write the bytes to the stream
+                client.WriteLine(data); // Write the new line to the stream
             }
 
             /// <summary>
@@ -2984,8 +3511,7 @@ namespace NetLib
             {
                 Clients.SSLClient client = GetClientByID(clientID); // Get the client by the specified ID
                 if (client == null) return; // Check if the client is null
-                byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
-                DirectWrite(buffer, clientID); // Write the bytes to the stream
+                client.WriteLine(data); // Write the new line to the stream
             }
 
             /// <summary>
@@ -3263,7 +3789,7 @@ namespace NetLib
                 {
                     bytesRead = client.Receive(buffer, 0, maxSize, SocketFlags.None); // Read bytes from the stream
                 }
-                catch (System.IO.IOException) // Timeout happened
+                catch (IOException) // Timeout happened
                 {
                     return null; // Return empty result
                 }
@@ -3296,7 +3822,7 @@ namespace NetLib
                     {
                         bytesRead = client.Receive(buffer, 0, RecvSize, SocketFlags.None); // Read bytes from the stream
                     }
-                    catch (System.IO.IOException) // Timeout happened
+                    catch (IOException) // Timeout happened
                     {
                         return null; // Return empty result
                     }
@@ -3363,7 +3889,7 @@ namespace NetLib
                 {
                     bytesRead = client.EndReceive(ar); // Read bytes from the stream
                 }
-                catch (System.IO.IOException ioex) // Timeout happened
+                catch (IOException ioex) // Timeout happened
                 {
 #if Logging_verbose
                     Console.WriteLine("Suppressing read error, caused by timeout");
@@ -3530,7 +4056,7 @@ namespace NetLib
                 augmentations.ForEach((aug) => data = aug.OnBeforeSendString(data, SendEncoder)); // Let the augmentations modify the data
                 augmentations.ForEach((aug) => aug.OnAfterSendString(data, SendEncoder)); // Let the augmentations inspect the data
                 byte[] sendBuffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to bytes
-                DirectWrite(sendBuffer, 0, sendBuffer.Length); // Write the bytes to the stream
+                client.Send(sendBuffer, 0, sendBuffer.Length, SocketFlags.None); // Send the bytes to the stream
             }
 
             /// <summary>
@@ -3843,7 +4369,7 @@ namespace NetLib
                 {
                     bytesRead = sslStream.EndRead(ar); // Read from the stream
                 }
-                catch (System.IO.IOException ioex) // Timeout happened
+                catch (IOException ioex) // Timeout happened
                 {
 #if Logging_verbose
                     Console.WriteLine("Suppressing socket error, caused by timing out");
@@ -3963,7 +4489,7 @@ namespace NetLib
                 {
                     bytesRead = sslStream.Read(buffer, 0, maxSize); // Read from the stream
                 }
-                catch (System.IO.IOException) // Check for timeouts
+                catch (IOException) // Check for timeouts
                 {
                     return null; // Return null in case of timeout
                 }
@@ -3996,7 +4522,7 @@ namespace NetLib
                     {
                         bytesRead = sslStream.Read(buffer, 0, RecvSize); // Read bytes from the stream
                     }
-                    catch (System.IO.IOException) // Timeout happened
+                    catch (IOException) // Timeout happened
                     {
                         return null; // Return empty result
                     }
@@ -4076,7 +4602,7 @@ namespace NetLib
                 augmentations.ForEach((aug) => data = aug.OnBeforeReceiveString(data, SendEncoder)); // Let the augmentations modify the data
                 augmentations.ForEach((aug) => aug.OnAfterReceiveString(data, SendEncoder)); // Let the augmentations inspect the data
                 byte[] buffer = SendEncoder.GetBytes(data + WriteNewLine); // Convert the line and the terminator to a byte array
-                DirectWrite(buffer, 0, buffer.Length); // Write the bytes to the stream
+                sslStream.Write(buffer, 0, buffer.Length); // Write the bytes to the stream
             }
 
             /// <summary>
@@ -4243,6 +4769,10 @@ namespace NetLib
             /// The hostname of the server to validate TLS with
             /// </summary>
             private string serverHostname = "";
+            /// <summary>
+            /// Check the latency of the ftp server
+            /// </summary>
+            private Utils.LatencyCounter lc;
 
             /// <summary>
             /// Create a new FTP client
@@ -4251,7 +4781,26 @@ namespace NetLib
             public FTPClient(bool useSSL = false)
             {
                 ssl = useSSL; // Set the ssl flag
+                lc = new Utils.LatencyCounter(); // Create a new latency counter
                 Debug($"[OBJ]: Created, ssl usage set to: {ssl}");
+            }
+
+            /// <summary>
+            /// Get the full latency information string
+            /// </summary>
+            /// <returns>The string data of the latency counter</returns>
+            public string GetLatencyData()
+            {
+                return lc.ToString(); // Return the latency information
+            }
+
+            /// <summary>
+            /// Get the average latency between the client and the server
+            /// </summary>
+            /// <returns>The average latency between the client and the server</returns>
+            public long GetAverageLatency()
+            {
+                return lc.AverageLatency; // Return the average latency
             }
 
             /// <summary>
@@ -4280,9 +4829,8 @@ namespace NetLib
             {
                 Debug($"[CTRL]: Initiating quit command");
                 if (write == null) throw new InvalidOperationException("Can't disconnect from server, when you're not even connected to it");
-                string disconnect = (new Utils.FTP.Request() { command = "QUIT", arguments = "" }).ToString(); // Get the command to send
-                write.WriteLine(disconnect); // Send the command
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "QUIT", arguments = "" }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ClosingControlConnection) throw new System.Security.SecurityException("Server failed to close control channel connection"); // Throw if unexpected status code
                 Debug($"[CTRL]: Server accepted quit");
                 netClient.CloseStream(); // Close the stream
@@ -4346,10 +4894,11 @@ namespace NetLib
             /// Execute and ftp command on the remote server
             /// </summary>
             /// <param name="req">The command to execute</param>
-            private void ExecuteCommand(Utils.FTP.Request req)
+            private int ExecuteCommand(Utils.FTP.Request req)
             {
                 write.WriteLine(req.ToString()); // Send the command to the server
                 Debug($"[CMD]: {req.ToString()}"); // Debug output the command
+                return lc.PacketSent(); // Start the latency timer
             }
 
             /// <summary>
@@ -4362,7 +4911,7 @@ namespace NetLib
                 Debug($"[DWL]: Starting file download");
                 string newName = localFile + "\\" + remoteFile; // Get the new path of the local file
                 byte[] data = DownloadFile(remoteFile); // Download the file
-                System.IO.File.WriteAllBytes(newName, data); // Write the file to disk
+                File.WriteAllBytes(newName, data); // Write the file to disk
                 Debug($"[DWL]: File contents written to disk");
             }
 
@@ -4386,10 +4935,10 @@ namespace NetLib
             {
                 Debug("[DWL]: Starting download procedure");
                 ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
-                ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
                 var (_read, _, _client) = ConnectDataPort(dataPort, false); // Connect to the data channel
-                _client.ReadTimeout = 1000; // Set a basic read timeout to know when the data is fully received
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                _client.ReadTimeout = Math.Max(5 * (int)lc.AverageLatency, 100); // Set a basic read timeout to know when the data is fully received
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
                 byte[] result = new byte[0]; // Define the result
                 while (true)
@@ -4406,7 +4955,7 @@ namespace NetLib
                 _client.CloseStream(); // Close the ssl stream
                 dataSocket.ForceStop(); // Stop the ssl client
                 Debug("[DWL]: File bytes read from server");
-                resp = GetResponse(); // Get the response
+                resp = GetResponse(-1); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
                 Debug("[DWL]: Download finished");
                 return result;
@@ -4422,14 +4971,14 @@ namespace NetLib
                 Debug("[DWL]: Starting download procedure");
                 ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
                 var (_, _, _client) = ConnectDataPort(dataPort, false); // Connect to the data channel
-                ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "RETR", arguments = remoteFile }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
                 sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
                 SSLClient client = new SSLClient(sslStream)
                 {
-                    ReadTimeout = 1000 // Set a basic read timeout to know when the data is fully received
+                    ReadTimeout = Math.Max(10 * (int)lc.AverageLatency, 350) // Set a basic read timeout to know when the data is fully received
                 }; // Wrap the ssl stream in the ssl client
                 byte[] result = new byte[0]; // Define the result
                 while (true)
@@ -4447,7 +4996,7 @@ namespace NetLib
                 client.ForceStop(); // Stop the ssl client
                 dataSocket.ForceStop(); // Stop the tcp client
                 Debug("[DWL]: File bytes read from server");
-                resp = GetResponse(); // Get the response
+                resp = GetResponse(-1); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
                 Debug("[DWL]: Download finished");
                 return result;
@@ -4460,8 +5009,8 @@ namespace NetLib
             public void UploadFile(string filePath)
             {
                 Debug("[UPL]: Initiating file upload");
-                string name = (new System.IO.FileInfo(filePath)).Name; // Get the name of the file
-                byte[] content = System.IO.File.ReadAllBytes(filePath); // Get the byte content of the file
+                string name = (new FileInfo(filePath)).Name; // Get the name of the file
+                byte[] content = File.ReadAllBytes(filePath); // Get the byte content of the file
                 Debug("[UPL]: File loaded into memory");
                 UploadFile(name, content); // Upload the file to the server
             }
@@ -4486,14 +5035,14 @@ namespace NetLib
             {
                 Debug("[UPL]: Starting upload procedure");
                 ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
-                ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
                 var (_, _write, _) = ConnectDataPort(dataPort, ssl); // Get the write socket of the data channel
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
                 _write.DirectWrite(fileBytes, 0, fileBytes.Length); // Write the file to the stream
                 dataSocket.ForceStop(); // Stop the data channel socket
                 Debug("[UPL]: File bytes sent to server");
-                resp = GetResponse(); // Get the response
+                resp = GetResponse(-1); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
                 Debug("[UPL]: Upload finished");
             }
@@ -4508,8 +5057,8 @@ namespace NetLib
                 Debug("[UPL]: Starting upload procedure");
                 ValueTuple<string, int> dataPort = GetDataPort(); // Get the data channel to connect to
                 var (_, _, _client) = ConnectDataPort(dataPort, false); // Connect to the data channel
-                ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "STOR", arguments = fileName }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new System.Security.SecurityException("Failed to start file transfer"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(_client.GetRawStream());
                 sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
@@ -4519,7 +5068,7 @@ namespace NetLib
                 client.ForceStop(); // Stop the ssl client
                 dataSocket.ForceStop(); // Stop the tcp client
                 Debug("[UPL]: File bytes sent to server");
-                resp = GetResponse(); // Get the response
+                resp = GetResponse(-1); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new System.Security.SecurityException("Failed to transfer the file"); // Throw if unexpected status code
                 Debug("[UPL]: Upload finished");
             }
@@ -4546,12 +5095,12 @@ namespace NetLib
             public void RenameFile(string fileToRename, string newName)
             {
                 Debug($"[REN]: Initiating rename");
-                ExecuteCommand(new Utils.FTP.Request() { command = "RNFR", arguments = fileToRename }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "RNFR", arguments = fileToRename }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionPending) throw new System.Security.SecurityException("Failed to init rename function"); // Throw if unexpected status code
                 Debug($"[REN]: File to rename, located, so far so good");
-                ExecuteCommand(new Utils.FTP.Request() { command = "RNTO", arguments = newName }); // Send the command to the server
-                resp = GetResponse(); // Get the response
+                tid = ExecuteCommand(new Utils.FTP.Request() { command = "RNTO", arguments = newName }); // Send the command to the server
+                resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to rename the file"); // Throw if unexpected status code
                 Debug($"[REN]: File renamed");
             }
@@ -4577,8 +5126,8 @@ namespace NetLib
             /// </summary>
             public void CdUp()
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "CDUP", arguments = "" }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "CDUP", arguments = "" }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
                 Debug($"[UP1]: Changed the current directory to the parent directory");
             }
@@ -4643,8 +5192,8 @@ namespace NetLib
             /// <param name="directoryName">The name of the directory to remove</param>
             private void RemoveDirectory(string directoryName)
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "RMD", arguments = directoryName }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "RMD", arguments = directoryName }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
                 Debug($"[RMD]: Directory {directoryName} removed");
             }
@@ -4655,8 +5204,8 @@ namespace NetLib
             /// <param name="fileName">The name of the file to remove</param>
             public void DeleteFile(string fileName)
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "DELE", arguments = fileName }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "DELE", arguments = fileName }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
                 Debug($"[FDEL]: File {fileName} deleted");
             }
@@ -4667,8 +5216,8 @@ namespace NetLib
             /// <param name="directoryName">The name of the new directory</param>
             public void CreateNewDirectory(string directoryName)
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "MKD", arguments = directoryName }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "MKD", arguments = directoryName }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new System.Security.SecurityException("Failed to create new directory"); // Throw if unexpected status code
                 Debug($"[MKD]: Directory {directoryName} created");
             }
@@ -4678,11 +5227,11 @@ namespace NetLib
             /// </summary>
             private void SetupSecureDataChannel()
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "PBSZ", arguments = "0" }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "PBSZ", arguments = "0" }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new System.Security.SecurityException("Failed to set the protection buffer size"); // Throw if unexpected status code
-                ExecuteCommand(new Utils.FTP.Request() { command = "PROT", arguments = "P" }); // Send the command to the server
-                resp = GetResponse(); // Get the response
+                tid = ExecuteCommand(new Utils.FTP.Request() { command = "PROT", arguments = "P" }); // Send the command to the server
+                resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new System.Security.SecurityException("Failed to set the protection level of the data channel"); // Throw if unexpected status code
                 Debug("[TLS]: Data channel secured");
             }
@@ -4701,8 +5250,8 @@ namespace NetLib
             /// </summary>
             private void BeginTLS()
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "AUTH", arguments = "TLS" }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "AUTH", arguments = "TLS" }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.AuthContinue) throw new System.Security.SecurityException("Server failed to init the TLS connection"); // Throw if unexpected status code
                 System.Net.Security.SslStream sslStream = new System.Net.Security.SslStream(netClient.GetRawStream()); // Create the ssl stream from the client
                 sslStream.AuthenticateAsClient(serverHostname); // Authenticate to the server
@@ -4766,8 +5315,8 @@ namespace NetLib
             /// <returns>The IP and port to connect to</returns>
             private (string ip, int port) GetDataPort()
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "PASV", arguments = "" }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Wait for response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "PASV", arguments = "" }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Wait for response
                 if (resp.statusCode != Utils.FTP.StatusCode.EnterPasvMode) throw new Exception("Failed to start entering to passive mode"); // Throw an exception if unexpected status code
                 Debug("[PASV Handler]: Got PASV destination");
                 return Utils.FTP.GetPasvDestination(resp.message); // Return the parsed data
@@ -4779,8 +5328,8 @@ namespace NetLib
             /// <param name="type">Set to "I" for binary mode and set to "A" for ASCII mode</param>
             private void SetType(string type = "I")
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "TYPE", arguments = type }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "TYPE", arguments = type }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.Success) throw new Exception("Failed to set the transfer type"); // Throw if unexpected status code
                 Debug($"[TYP]: Transfer type changed to: {type}");
             }
@@ -4826,7 +5375,7 @@ namespace NetLib
             /// </summary>
             private byte[] ListFiles((string ip, int port) dPort)
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "LIST", arguments = "" }); // Send the command to the server
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "LIST", arguments = "" }); // Send the command to the server
                 byte[] pasvBuffer = new byte[0]; // Define the result buffer
                 if (ssl)
                 {
@@ -4845,9 +5394,10 @@ namespace NetLib
                     Debug($"[FL]: Read setup with TLS: done");
                 }
 
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.DataChannelReady) throw new Exception("Failed to start the listing of the requested directory"); // Throw if unexpected status code
-                resp = GetResponse(); // Get the next response
+                tid = lc.PacketSent();
+                resp = GetResponse(tid); // Get the next response
                 if (resp.statusCode != Utils.FTP.StatusCode.CloseFtpDataSuccess) throw new Exception("Failed to get the file list of the directory"); // Throw if unexpected status code
                 Debug($"[FL]: Transfer OK");
                 return pasvBuffer; // Return the result
@@ -4856,8 +5406,9 @@ namespace NetLib
             /// <summary>
             /// Get a response from the FTP server
             /// </summary>
+            /// <param name="latencyTracker">The latency tracker returned from the execute command call</param>
             /// <returns>The current response from the FTP server</returns>
-            private Utils.FTP.Response GetResponse()
+            private Utils.FTP.Response GetResponse(int latencyTracker)
             {
                 string result = read.ReadLineAsync().Result; // Get the next line from the server
                 Utils.FTP.Response r = result.ToResponse(); // Parse the response
@@ -4878,6 +5429,7 @@ namespace NetLib
                 {
                     throw new AccessViolationException($"General login failure, here's the message of the server: {r.message}"); // Throw an exception on access denials
                 }
+                if (latencyTracker != -1) lc.PacketReceived(latencyTracker);
                 return r; // Return the response of the server
             }
 
@@ -4886,7 +5438,7 @@ namespace NetLib
             /// </summary>
             private void GetServer()
             {
-                Utils.FTP.Response r = GetResponse(); // Get the response of the server
+                Utils.FTP.Response r = GetResponse(-1); // Get the response of the server
                 if (r.statusCode == Utils.FTP.StatusCode.ReadyNewUser) // Check th status code
                 {
                     ServerInformation = r.message; // Set the message of the server
@@ -4900,8 +5452,8 @@ namespace NetLib
             /// <param name="targetDirectory">The directory to change to</param>
             public void Cwd(string targetDirectory)
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "CWD", arguments = targetDirectory }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "CWD", arguments = targetDirectory }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.ActionSuccess) throw new Exception("Failed to change the working directory"); // Check if the status code is positive
                 Debug($"[WD]: Changed to {targetDirectory}");
             }
@@ -4912,8 +5464,8 @@ namespace NetLib
             /// <returns>The path of the current working directory</returns>
             public string Pwd()
             {
-                ExecuteCommand(new Utils.FTP.Request() { command = "PWD", arguments = "" }); // Send the command to the server
-                Utils.FTP.Response resp = GetResponse(); // Get the response
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "PWD", arguments = "" }); // Send the command to the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response
                 if (resp.statusCode != Utils.FTP.StatusCode.PathnameCreated) throw new Exception("Failed to get the current working directory"); // Check if the status code is positive
                 // Format and return the current path
                 int start = resp.message.IndexOf('\"') + 1; // Get the start of the substring
@@ -4934,15 +5486,15 @@ namespace NetLib
 #if Validation_hard
                 if (socket == null) throw new InvalidOperationException("Tried to login without connecting to the server"); // Check if the socket is alive
 #endif
-                ExecuteCommand(new Utils.FTP.Request() { command = "USER", arguments = user }); // Send the command to the server
+                int tid = ExecuteCommand(new Utils.FTP.Request() { command = "USER", arguments = user }); // Send the command to the server
                 Debug($"[AUTH]: Username sent to server");
-                Utils.FTP.Response resp = GetResponse(); // Get the response from the server
+                Utils.FTP.Response resp = GetResponse(tid); // Get the response from the server
                 if (resp.statusCode == Utils.FTP.StatusCode.SendPassword) // Check if we can send the username
                 {
                     Debug($"[AUTH]: Allowed to send password");
-                    ExecuteCommand(new Utils.FTP.Request() { command = "PASS", arguments = pass }); // Send the command to the server
+                    tid = ExecuteCommand(new Utils.FTP.Request() { command = "PASS", arguments = pass }); // Send the command to the server
                     Debug($"[AUTH]: Password sent to server");
-                    resp = GetResponse(); // Get the response
+                    resp = GetResponse(tid); // Get the response
                     return resp.statusCode == Utils.FTP.StatusCode.LoginSuccess; // Check if the login was successful
                 }
 
@@ -5016,7 +5568,7 @@ namespace NetLib
                 int milliSeconds = (int)epochTime.TotalMilliseconds; // Get the ms of the epoch time
                 if (randomIncrementor == 0) // If the random incrementor isn't initialized
                 {
-                    System.Security.Cryptography.RNGCryptoServiceProvider rng = new System.Security.Cryptography.RNGCryptoServiceProvider(); // Get the rng service
+                    RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider(); // Get the rng service
                     byte[] data = new byte[32]; // Create buffer for the result
                     rng.GetBytes(data); // Get the rng values
                     foreach (byte random in data) // Loop through the bytes
@@ -5034,6 +5586,87 @@ namespace NetLib
                 string randomValue = randomInteger.ToString("X"); // Convert them to a hex string
                 randomIncrementor++; // Increment the incrementor
                 return randomValue; // Return the random value
+            }
+        }
+
+        /// <summary>
+        /// Counts the latency of the connection
+        /// </summary>
+        public class LatencyCounter
+        {
+            /// <summary>
+            /// A list which containes the trackers and it's associated timer objects
+            /// </summary>
+            private List<(int tracker, System.Diagnostics.Stopwatch timer)> counterList = new List<(int, System.Diagnostics.Stopwatch)>();
+            /// <summary>
+            /// An integer incrementer to track the packets
+            /// </summary>
+            private int tracker;
+            /// <summary>
+            /// The average time between sending a message and a message arriving
+            /// </summary>
+            public long AverageLatency { get; private set; }
+            /// <summary>
+            /// The minimum time between sending a message and a message arriving
+            /// </summary>
+            public long MinimumLatency { get; private set; }
+            /// <summary>
+            /// The maximum time between sending a message and a message arriving
+            /// </summary>
+            public long MaximumLatency { get; private set; }
+            /// <summary>
+            /// The number of latency checks
+            /// </summary>
+            public int NumberOfSamples { get; private set; }
+
+            /// <summary>
+            /// Get the latency information of the network in a string format
+            /// </summary>
+            /// <returns>The string value of the object</returns>
+            public override string ToString()
+            {
+                return $"Average Latency: {AverageLatency} ms\r\nMinimum Latency: {MinimumLatency} ms\r\nMaximum latency: {MaximumLatency} ms\r\nNumber of packets: {NumberOfSamples}"; // Return the string format of the object
+            }
+
+            /// <summary>
+            /// Create a new latency counter object
+            /// </summary>
+            public LatencyCounter()
+            {
+                // Init the variables
+                AverageLatency = 0;
+                MinimumLatency = 0;
+                MaximumLatency = 0;
+                tracker = 0;
+            }
+
+            /// <summary>
+            /// Start the timer and get it's associated ID
+            /// </summary>
+            /// <returns>The ID of the started time, which you can track the packet with</returns>
+            public int PacketSent()
+            {
+                System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch(); // Create a new timer
+                sw.Start(); // Start the timer
+                int current = tracker; // Copy the tracker ID
+                counterList.Add((current, sw)); // Add the timer with the tracker to the timer list
+                tracker++; // Increment the tracker ID
+                return current; // Return the current tracker ID
+            }
+
+            /// <summary>
+            /// Stop the associated timer and calculate the results
+            /// </summary>
+            /// <param name="trackerID">The ID returned from the PacketSent call</param>
+            public void PacketReceived(int trackerID)
+            {
+                var (_, timer) = counterList.Find((item) => item.tracker == trackerID); // Get the timer based on the tracker ID
+                timer.Stop(); // Stop the timer
+                NumberOfSamples++; // Increment the number of samples
+                long total = AverageLatency + timer.ElapsedMilliseconds; // Get the total elapsed milliseconds
+                AverageLatency = total / NumberOfSamples; // Calculate the average elapsed milliseconds
+                if (MinimumLatency == 0 || MinimumLatency > timer.ElapsedMilliseconds) MinimumLatency = timer.ElapsedMilliseconds; // Calculate the min latency
+                if (MaximumLatency == 0 || MaximumLatency < timer.ElapsedMilliseconds) MaximumLatency = timer.ElapsedMilliseconds; // Calculate the max latency
             }
         }
 
@@ -5074,7 +5707,7 @@ namespace NetLib
             public static X509Certificate2 ParseCertificationFile(string filePath)
             {
 #if Validation_hard // Not so important check
-                if (!System.IO.File.Exists(filePath) || (new System.IO.FileInfo(filePath)).Length == 0) throw new ArgumentException($"The specified file is not valid: {filePath}"); // Check if the file exists and isn't empty
+                if (!File.Exists(filePath) || (new FileInfo(filePath)).Length == 0) throw new ArgumentException($"The specified file is not valid: {filePath}"); // Check if the file exists and isn't empty
 #endif
                 return new X509Certificate2(filePath); // Parse and return the certificate
             }
