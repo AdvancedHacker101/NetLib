@@ -3,16 +3,16 @@
 #if Validation_hard // When hard validation is enabled it will also enable soft validation
 #define Validation_soft // Will throw the same errors but a with a little more userfriendly message as the program would without try catching would
 #endif
+using NetLib.Interfaces;
 using System;
-using System.Text;
-using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.IO;
 using System.Net; // Basic networking objects
 using System.Net.Sockets; // Sockets
-using System.Security.Cryptography.X509Certificates; // Certificate parsing
-using System.Collections.Generic;
-using NetLib.Interfaces;
 using System.Security.Cryptography;
-using System.IO;
+using System.Security.Cryptography.X509Certificates; // Certificate parsing
+using System.Text;
+using System.Threading.Tasks;
 
 namespace NetLib
 {
